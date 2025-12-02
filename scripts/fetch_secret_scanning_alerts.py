@@ -338,27 +338,25 @@ def load_config() -> Tuple[str, List[str]]:
     Returns:
         tuple: (enterprise_slug, list of PATs)
     """
-    enterprise_slug = os.getenv("GITHUB_ENTERPRISE_SLUG")
-    pats_str = os.getenv("GITHUB_PATS")
+    enterprise_slug = os.getenv("GH_ENTERPRISE_SLUG")
+    pats_str = os.getenv("GH_PATS")
 
     if not enterprise_slug:
-        logging.error("FATAL: GITHUB_ENTERPRISE_SLUG environment variable not set.")
+        logging.error("FATAL: GH_ENTERPRISE_SLUG environment variable not set.")
         exit(1)
 
     if not enterprise_slug.replace("-", "").replace("_", "").isalnum():
-        logging.error(
-            f"FATAL: Invalid GITHUB_ENTERPRISE_SLUG format: {enterprise_slug}"
-        )
+        logging.error(f"FATAL: Invalid GH_ENTERPRISE_SLUG format: {enterprise_slug}")
         exit(1)
 
     if not pats_str:
-        logging.error("FATAL: GITHUB_PATS environment variable not set.")
+        logging.error("FATAL: GH_PATS environment variable not set.")
         exit(1)
 
     pats = [token.strip() for token in pats_str.split(",") if token.strip()]
 
     if not pats:
-        logging.error("FATAL: No valid PATs found in GITHUB_PATS.")
+        logging.error("FATAL: No valid PATs found in GH_PATS.")
         exit(1)
 
     # Validate PAT formats

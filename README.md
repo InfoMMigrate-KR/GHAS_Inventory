@@ -15,7 +15,7 @@ A Python tool for fetching and analyzing GitHub Enterprise secret scanning alert
 ## Prerequisites
 
 - Python 3.9+
-- GitHub Personal Access Tokens with `read:enterprise` scope
+- GitHub Personal Access Tokens with `admin:enterprise` scope
 - Access to GitHub Enterprise organization
 
 ## Setup
@@ -45,10 +45,10 @@ Edit `.env` with your configuration:
 
 ```bash
 # Required: Your GitHub Enterprise slug
-GITHUB_ENTERPRISE_SLUG=your-enterprise-slug
+GH_ENTERPRISE_SLUG=your-enterprise-slug
 
 # Required: GitHub Personal Access Tokens (comma-separated)
-GITHUB_PATS=ghp_token1,ghp_token2,ghp_token3
+GH_PATS=ghp_token1,ghp_token2,ghp_token3
 
 # Optional: Alert state to fetch (default: open)
 ALERT_STATE=open
@@ -76,8 +76,8 @@ python fetch_secret_scanning_alerts.py
 The repository includes a GitHub Actions workflow for automated execution:
 
 1. **Set up secrets** in your GitHub repository:
-   - `GITHUB_ENTERPRISE_SLUG`: Your enterprise slug
-   - `GITHUB_PATS`: Comma-separated GitHub tokens
+   - `GH_ENTERPRISE_SLUG`: Your enterprise slug
+   - `GH_PATS`: Comma-separated GitHub tokens
 
 2. **Manual trigger**: Go to Actions → "Fetch Secret Scanning Alerts" → "Run workflow"
 
@@ -87,8 +87,8 @@ The repository includes a GitHub Actions workflow for automated execution:
 
 | Environment Variable | Description | Default | Valid Values |
 |---------------------|-------------|---------|--------------|
-| `GITHUB_ENTERPRISE_SLUG` | GitHub Enterprise organization slug | *(required)* | String |
-| `GITHUB_PATS` | Comma-separated GitHub tokens | *(required)* | String |
+| `GH_ENTERPRISE_SLUG` | GitHub Enterprise organization slug | *(required)* | String |
+| `GH_PATS` | Comma-separated GitHub tokens | *(required)* | String |
 | `ALERT_STATE` | Alert state filter | `open` | `open`, `resolved`, `all` |
 | `OUTPUT_FORMAT` | Export format | `xlsx` | `xlsx`, `csv`, `both` |
 | `OUTPUT_FILENAME` | Custom filename (without extension) | Auto-generated | String |
@@ -134,7 +134,7 @@ Each alert record includes:
 ### Common Issues
 
 1. **Authentication Error**: Verify your tokens have the correct `read:enterprise` scope
-2. **Rate Limit Issues**: Add more tokens to `GITHUB_PATS` for better limits
+2. **Rate Limit Issues**: Add more tokens to `GH_PATS` for better limits
 3. **Permission Errors**: Ensure write permissions to the output directory
 4. **Network Timeouts**: Check network connectivity and GitHub API status
 
