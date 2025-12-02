@@ -289,43 +289,42 @@ def load_alert_config() -> Dict[str, Any]:
     Can be set in .env file or GitHub Actions environment.
 
     Environment Variables:
-        ALERT_STATE: Alert state to fetch - open, resolved, all (default: open)
-        OUTPUT_FILENAME: Custom output filename without extension (optional)
-        OUTPUT_FORMAT: Output format - xlsx, csv, both (default: xlsx)
+        ALERT_STATE: Alert state to fetch - open, resolved, all (default: all)
+        OUTPUT_FILENAME: Custom output filename without extension (default: secret_scanning_report)
+        OUTPUT_FORMAT: Output format - xlsx, csv, both (default: csv)
 
     Returns:
         dict: Configuration dictionary
     """
 
     config = {
-        "state": os.getenv("ALERT_STATE", "open").lower(),
-        "output": os.getenv("OUTPUT_FILENAME"),
-        "format": os.getenv("OUTPUT_FORMAT", "xlsx").lower(),
+        "state": os.getenv("ALERT_STATE", "all").lower(),
+        "output": os.getenv("OUTPUT_FILENAME", "secret_scanning_report"),
+        "format": os.getenv("OUTPUT_FORMAT", "csv").lower(),
     }
 
     # Validate state (Secret scanning supports: open, resolved)
     valid_states = ["open", "resolved", "all"]
     if config["state"] not in valid_states:
         logging.warning(
-            f"Invalid ALERT_STATE '{config['state']}'. Using 'open'. "
+            f"Invalid ALERT_STATE '{config['state']}'. Using 'all'. "
             f"Valid options for secret scanning: {', '.join(valid_states)}"
         )
-        config["state"] = "open"
+        config["state"] = "all"
 
     # Validate format
     valid_formats = ["xlsx", "csv", "both"]
     if config["format"] not in valid_formats:
         logging.warning(
-            f"Invalid OUTPUT_FORMAT '{config['format']}'. Using 'xlsx'. "
+            f"Invalid OUTPUT_FORMAT '{config['format']}'. Using 'csv'. "
             f"Valid options: {', '.join(valid_formats)}"
         )
-        config["format"] = "xlsx"
+        config["format"] = "csv"
 
     logging.info("Configuration loaded from environment variables:")
     logging.info(f"  - Alert State: {config['state']}")
     logging.info(f"  - Output Format: {config['format']}")
-    if config["output"]:
-        logging.info(f"  - Custom Output Filename: {config['output']}")
+    logging.info(f"  - Output Filename: {config['output']}")
 
     return config
 
@@ -685,10 +684,7 @@ def main():
         logging.info("=" * 80)
 
         # Use custom filename if provided, otherwise generate default
-        if config["output"]:
-            base_filename = config["output"]
-        else:
-            base_filename = f"secret_scanning_alerts_{timestamp}"
+        base_filename = config["output"]
 
         # Export based on format preference
         export_success = False
@@ -708,7 +704,7 @@ def main():
             csv_success = export_to_csv(
                 summary_data,
                 secret_scanning_data,
-                timestamp if not config["output"] else config["output"],
+                config["output"],
             )
             export_success = export_success or csv_success
 
