@@ -542,7 +542,6 @@ def export_to_excel(
 
 
 def export_to_csv(
-    summary_data: List[Dict],
     secret_scanning_data: List[Dict],
     timestamp: str = None,
 ) -> bool:
@@ -550,7 +549,6 @@ def export_to_csv(
     Export secret scanning data to CSV files as fallback.
 
     Args:
-        summary_data: Summary statistics
         secret_scanning_data: Secret scanning alerts
         timestamp: Timestamp string for filenames
 
@@ -558,17 +556,6 @@ def export_to_csv(
         bool: True if any file was successfully created
     """
     success_count = 0
-
-    try:
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            summary_df.to_csv(
-                os.path.join(output_dir, f"summary_{timestamp}.csv"), index=False
-            )
-            logging.info("Saved summary data as CSV")
-            success_count += 1
-    except Exception as e:
-        logging.error(f"Error saving summary CSV: {e}")
 
     try:
         if secret_scanning_data:
@@ -702,7 +689,6 @@ def main():
         if config["format"] in ["csv", "both"]:
             logging.info(f"Exporting to CSV files...")
             csv_success = export_to_csv(
-                summary_data,
                 secret_scanning_data,
                 config["output"],
             )
