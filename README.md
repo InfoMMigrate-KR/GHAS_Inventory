@@ -121,7 +121,7 @@ Each alert record includes:
 
 1. **Generate Personal Access Tokens**:
    - Go to GitHub Settings → Developer settings → Personal access tokens
-   - Create tokens with `read:enterprise` scope
+   - Create tokens with `admin:enterprise`, `admin:org`, `repo`, `workflow`, `user` scope
    - Store tokens securely
 
 2. **Multiple Token Benefits**:
