@@ -133,7 +133,7 @@ Each alert record includes:
 
 ### Common Issues
 
-1. **Authentication Error**: Verify your tokens have the correct `read:enterprise` scope
+1. **Authentication Error**: Verify your tokens have the correct `admin:enterprise` scope
 2. **Rate Limit Issues**: Add more tokens to `GH_PATS` for better limits
 3. **Permission Errors**: Ensure write permissions to the output directory
 4. **Network Timeouts**: Check network connectivity and GitHub API status
