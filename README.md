@@ -15,7 +15,7 @@ A Python tool for fetching and analyzing GitHub Enterprise secret scanning alert
 ## Prerequisites
 
 - Python 3.9+
-- GitHub Personal Access Tokens with `admin:enterprise` scope
+- GitHub Personal Access Tokens with `repo` scope
 - Access to GitHub Enterprise organization
 
 ## Setup
@@ -121,7 +121,7 @@ Each alert record includes:
 
 1. **Generate Personal Access Tokens**:
    - Go to GitHub Settings → Developer settings → Personal access tokens
-   - Create tokens with `admin:enterprise`, `admin:org`, `repo`, `workflow`, `user` scope
+   - Create tokens with `repo` scope
    - Store tokens securely
 
 2. **Multiple Token Benefits**:
@@ -133,7 +133,7 @@ Each alert record includes:
 
 ### Common Issues
 
-1. **Authentication Error**: Verify your tokens have the correct `admin:enterprise` scope
+1. **Authentication Error**: Verify your tokens have the correct `repo` scope
 2. **Rate Limit Issues**: Add more tokens to `GH_PATS` for better limits
 3. **Permission Errors**: Ensure write permissions to the output directory
 4. **Network Timeouts**: Check network connectivity and GitHub API status
