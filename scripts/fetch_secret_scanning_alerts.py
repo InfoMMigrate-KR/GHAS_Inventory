@@ -179,6 +179,15 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
         "Publicly_Leaked": ("publicly_leaked",),
         "Push_Protection_Bypassed": ("push_protection_bypassed",),
         "Location_Path": ("first_location_detected", "path"),
+        # New fields for commit information
+        "Location_Start_Line": ("first_location_detected", "start_line"),
+        "Location_End_Line": ("first_location_detected", "end_line"),
+        "Location_Start_Column": ("first_location_detected", "start_column"),
+        "Location_End_Column": ("first_location_detected", "end_column"),
+        "Location_Blob_Sha": ("first_location_detected", "blob_sha"),
+        "Location_Blob_URL": ("first_location_detected", "blob_url"),
+        # Repository admin information
+        "Repository_Admins": lambda alert: None,  # To be filled later
     }
     return extract_alert_data(alerts, field_mapping, "Secret Scanning")
 
@@ -374,6 +383,213 @@ def load_config() -> Tuple[str, List[str]]:
     logging.info(f"Found {len(valid_pats)} valid PATs to use in round-robin.")
 
     return enterprise_slug, valid_pats
+
+
+@retry_on_failure()
+def fetch_commit_info(
+    repo_full_name: str, blob_sha: str, pat_cycler: itertools.cycle
+) -> Dict:
+    """
+    Fetch commit information for a specific blob SHA.
+
+    Args:
+        repo_full_name: Full repository name (owner/repo)
+        blob_sha: The blob SHA from the secret location
+        pat_cycler: PAT cycler for authentication
+
+    Returns:
+        Dict with commit author and committer information
+    """
+    if not blob_sha or not repo_full_name:
+        return {"author": None, "committer": None, "sha": None}
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    token = next(pat_cycler)
+    headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        # Search for commits that modified the file
+        url = f"https://api.github.com/repos/{repo_full_name}/commits"
+        params = {"per_page": 10}  # Get recent commits
+
+        response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        commits = response.json()
+
+        # For now, return the most recent commit info
+        # In a more sophisticated approach, you'd need to find the specific commit
+        # that introduced the secret at the blob_sha location
+        if commits:
+            latest_commit = commits[0]
+            return {
+                "author": safe_get(latest_commit, "commit", "author", "name"),
+                "committer": safe_get(latest_commit, "commit", "committer", "name"),
+                "sha": safe_get(latest_commit, "sha"),
+            }
+
+    except Exception as e:
+        logging.warning(f"Failed to fetch commit info for {repo_full_name}: {e}")
+
+    return {"author": None, "committer": None, "sha": None}
+
+
+@retry_on_failure()
+def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle) -> str:
+    """
+    Fetch repository administrators.
+
+    Args:
+        repo_full_name: Full repository name (owner/repo)
+        pat_cycler: PAT cycler for authentication
+
+    Returns:
+        Comma-separated string of admin usernames
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    token = next(pat_cycler)
+    headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        # Fetch collaborators with admin permissions
+        url = f"https://api.github.com/repos/{repo_full_name}/collaborators"
+        params = {"permission": "admin", "per_page": 100}
+
+        response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        collaborators = response.json()
+        admin_logins = [
+            collab.get("login") for collab in collaborators if collab.get("login")
+        ]
+
+        return ", ".join(admin_logins) if admin_logins else None
+
+    except Exception as e:
+        logging.warning(f"Failed to fetch admins for {repo_full_name}: {e}")
+        return None
+
+
+def enrich_secret_data_with_commit_details(
+    secret_data: List[Dict], pat_cycler: itertools.cycle
+) -> List[Dict]:
+    """
+    Enrich secret scanning data with commit author information.
+    This function is separate and not called by default to save API rate limits.
+    """
+    logging.info("Enriching secret scanning data with commit information...")
+
+    enriched_data = []
+
+    for idx, alert in enumerate(secret_data):
+        try:
+            repo_full_name = (
+                f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
+            )
+            blob_sha = alert.get("Location_Blob_Sha")
+
+            # Fetch commit information
+            if (
+                blob_sha
+                and repo_full_name
+                and alert.get("Organization_Name")
+                and alert.get("Repository_Name")
+            ):
+                commit_info = fetch_commit_info(repo_full_name, blob_sha, pat_cycler)
+                alert["Commit_Author"] = commit_info.get("author")
+                alert["Commit_Committer"] = commit_info.get("committer")
+                alert["Commit_SHA"] = commit_info.get("sha")
+            else:
+                alert["Commit_Author"] = None
+                alert["Commit_Committer"] = None
+                alert["Commit_SHA"] = None
+
+            enriched_data.append(alert)
+
+            # Log progress every 50 items
+            if (idx + 1) % 50 == 0:
+                logging.info(f"Processed {idx + 1}/{len(secret_data)} alerts...")
+
+        except Exception as e:
+            logging.error(f"Error enriching alert {idx} with commit info: {e}")
+            enriched_data.append(alert)  # Add original alert even if enrichment fails
+
+    logging.info(f"Completed commit enrichment for {len(enriched_data)} alerts")
+    return enriched_data
+
+
+def enrich_secret_data_with_commit_info(
+    secret_data: List[Dict], pat_cycler: itertools.cycle
+) -> List[Dict]:
+    """
+    Enrich secret scanning data with repository admin information only.
+    """
+    logging.info("Enriching secret scanning data with repository admin information...")
+
+    if not secret_data:
+        return secret_data
+
+    # Step 1: Collect all unique repositories
+    unique_repos = set()
+    for alert in secret_data:
+        org_name = alert.get("Organization_Name")
+        repo_name = alert.get("Repository_Name")
+        if org_name and repo_name:
+            repo_full_name = f"{org_name}/{repo_name}"
+            unique_repos.add(repo_full_name)
+
+    logging.info(f"Found {len(unique_repos)} unique repositories to process")
+
+    # Step 2: Fetch repository admin data for all unique repos
+    repo_admins_cache = {}
+    for idx, repo_full_name in enumerate(unique_repos):
+        try:
+            repo_admins_cache[repo_full_name] = fetch_repo_admins(
+                repo_full_name, pat_cycler
+            )
+
+            # Log progress every 10 repositories
+            if (idx + 1) % 10 == 0:
+                logging.info(
+                    f"Fetched admin data for {idx + 1}/{len(unique_repos)} repositories..."
+                )
+
+        except Exception as e:
+            logging.error(f"Error fetching admins for {repo_full_name}: {e}")
+            repo_admins_cache[repo_full_name] = None
+
+    logging.info(f"Completed fetching admin data for {len(unique_repos)} repositories")
+
+    # Step 3: Map admin data back to all alerts
+    enriched_data = []
+    for alert in secret_data:
+        try:
+            org_name = alert.get("Organization_Name")
+            repo_name = alert.get("Repository_Name")
+
+            if org_name and repo_name:
+                repo_full_name = f"{org_name}/{repo_name}"
+                alert["Repository_Admins"] = repo_admins_cache.get(repo_full_name)
+            else:
+                alert["Repository_Admins"] = None
+
+            enriched_data.append(alert)
+
+        except Exception as e:
+            logging.error(f"Error mapping admin data to alert: {e}")
+            alert["Repository_Admins"] = None
+            enriched_data.append(alert)
+
+    logging.info(f"Completed enrichment for {len(enriched_data)} alerts")
+    return enriched_data
 
 
 @retry_on_failure()
@@ -653,6 +869,12 @@ def main():
         # Extract and process secret scanning data
         logging.info("Processing secret scanning alert data...")
         secret_scanning_data = extract_secret_scanning_data(secret_scanning_alerts)
+
+        # Enrich with admin information
+        if secret_scanning_data:
+            secret_scanning_data = enrich_secret_data_with_commit_info(
+                secret_scanning_data, pat_cycler
+            )
 
         # Generate timestamp for this query execution
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
