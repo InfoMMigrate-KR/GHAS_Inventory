@@ -387,17 +387,17 @@ def load_config() -> Tuple[str, List[str]]:
 
 def load_all_orgs_write_pat() -> Optional[str]:
     """
-    Load the ALL_ORGS_WRITE_PAT from environment variables.
+    Load the GH_ALL_ORGS_WRITE_PAT from environment variables.
     This PAT is used specifically for fetching repository admins.
 
     Returns:
-        str: The ALL_ORGS_WRITE_PAT token, or None if not set
+        str: The GH_ALL_ORGS_WRITE_PAT token, or None if not set
     """
-    pat = os.getenv("ALL_ORGS_WRITE_PAT")
+    pat = os.getenv("GH_ALL_ORGS_WRITE_PAT")
     if pat:
-        logging.info("Loaded ALL_ORGS_WRITE_PAT for admin retrieval")
+        logging.info("Loaded GH_ALL_ORGS_WRITE_PAT for admin retrieval")
     else:
-        logging.warning("ALL_ORGS_WRITE_PAT not set, will use standard PAT for admin retrieval")
+        logging.warning("GH_ALL_ORGS_WRITE_PAT not set, will use standard PAT for admin retrieval")
     return pat
 
 
@@ -462,7 +462,7 @@ def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle, admin_pa
     Args:
         repo_full_name: Full repository name (owner/repo)
         pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (ALL_ORGS_WRITE_PAT)
+        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
 
     Returns:
         Comma-separated string of admin usernames
@@ -475,7 +475,7 @@ def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle, admin_pa
     # Use admin_pat if provided, otherwise use pat_cycler
     if admin_pat:
         token = admin_pat
-        logging.debug(f"Using ALL_ORGS_WRITE_PAT for admin retrieval: {repo_full_name}")
+        logging.debug(f"Using GH_ALL_ORGS_WRITE_PAT for admin retrieval: {repo_full_name}")
     else:
         token = next(pat_cycler)
         logging.debug(f"Using standard PAT (cycled) for admin retrieval: {repo_full_name}")
@@ -559,7 +559,7 @@ def enrich_secret_data_with_commit_info(
     Args:
         secret_data: List of secret scanning alerts
         pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (ALL_ORGS_WRITE_PAT)
+        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
     """
     logging.info("Enriching secret scanning data with repository admin information...")
 
