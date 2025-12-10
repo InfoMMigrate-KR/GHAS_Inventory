@@ -385,6 +385,22 @@ def load_config() -> Tuple[str, List[str]]:
     return enterprise_slug, valid_pats
 
 
+def load_all_orgs_write_pat() -> Optional[str]:
+    """
+    Load the ALL_ORGS_WRITE_PAT from environment variables.
+    This PAT is used specifically for fetching repository admins.
+
+    Returns:
+        str: The ALL_ORGS_WRITE_PAT token, or None if not set
+    """
+    pat = os.getenv("ALL_ORGS_WRITE_PAT")
+    if pat:
+        logging.info("Loaded ALL_ORGS_WRITE_PAT for admin retrieval")
+    else:
+        logging.warning("ALL_ORGS_WRITE_PAT not set, will use standard PAT for admin retrieval")
+    return pat
+
+
 @retry_on_failure()
 def fetch_commit_info(
     repo_full_name: str, blob_sha: str, pat_cycler: itertools.cycle
@@ -439,13 +455,14 @@ def fetch_commit_info(
 
 
 @retry_on_failure()
-def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle) -> str:
+def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle, admin_pat: Optional[str] = None) -> str:
     """
     Fetch repository administrators.
 
     Args:
         repo_full_name: Full repository name (owner/repo)
         pat_cycler: PAT cycler for authentication
+        admin_pat: Optional dedicated PAT for admin retrieval (ALL_ORGS_WRITE_PAT)
 
     Returns:
         Comma-separated string of admin usernames
@@ -455,7 +472,14 @@ def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle) -> str:
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    token = next(pat_cycler)
+    # Use admin_pat if provided, otherwise use pat_cycler
+    if admin_pat:
+        token = admin_pat
+        logging.debug(f"Using ALL_ORGS_WRITE_PAT for admin retrieval: {repo_full_name}")
+    else:
+        token = next(pat_cycler)
+        logging.debug(f"Using standard PAT (cycled) for admin retrieval: {repo_full_name}")
+    
     headers["Authorization"] = f"Bearer {token}"
 
     try:
@@ -527,10 +551,15 @@ def enrich_secret_data_with_commit_details(
 
 
 def enrich_secret_data_with_commit_info(
-    secret_data: List[Dict], pat_cycler: itertools.cycle
+    secret_data: List[Dict], pat_cycler: itertools.cycle, admin_pat: Optional[str] = None
 ) -> List[Dict]:
     """
     Enrich secret scanning data with repository admin information only.
+    
+    Args:
+        secret_data: List of secret scanning alerts
+        pat_cycler: PAT cycler for authentication
+        admin_pat: Optional dedicated PAT for admin retrieval (ALL_ORGS_WRITE_PAT)
     """
     logging.info("Enriching secret scanning data with repository admin information...")
 
@@ -553,7 +582,7 @@ def enrich_secret_data_with_commit_info(
     for idx, repo_full_name in enumerate(unique_repos):
         try:
             repo_admins_cache[repo_full_name] = fetch_repo_admins(
-                repo_full_name, pat_cycler
+                repo_full_name, pat_cycler, admin_pat
             )
 
             # Log progress every 10 repositories
@@ -819,6 +848,9 @@ def main():
 
         enterprise_slug, pats = load_config()
         pat_cycler = itertools.cycle(pats)
+        
+        # Load the optional ALL_ORGS_WRITE_PAT for admin retrieval
+        admin_pat = load_all_orgs_write_pat()
 
         logging.info("Fetching secret scanning alerts using REST API...")
 
@@ -873,7 +905,7 @@ def main():
         # Enrich with admin information
         if secret_scanning_data:
             secret_scanning_data = enrich_secret_data_with_commit_info(
-                secret_scanning_data, pat_cycler
+                secret_scanning_data, pat_cycler, admin_pat
             )
 
         # Generate timestamp for this query execution
