@@ -145,6 +145,38 @@ def extract_alert_data(
     return extracted_data
 
 
+def parse_organization_name(org_name: str) -> Tuple[str, str]:
+    """
+    Parse organization name to extract Project_Code and Cost_Center.
+
+    Expected format: xxxxx-yyyyy-zzzzz (exactly 3 parts)
+    - xxxxx: Project_Code (first part)
+    - zzzzz: Cost_Center (last part)
+
+    Invalid formats (treated as NO PROJECT CODE / NO COST CENTER):
+    - Less than 3 parts
+    - More than 3 parts (e.g., 'xxxxx-yyyyy-zzzzz-aaaaa')
+
+    Args:
+        org_name: Organization name string
+
+    Returns:
+        Tuple of (Project_Code, Cost_Center)
+    """
+    if not org_name:
+        return "NO PROJECT CODE", "NO COST CENTER"
+
+    parts = org_name.split("-")
+
+    # Check if the format has exactly 3 parts separated by '-'
+    if len(parts) == 3:
+        project_code = parts[0]
+        cost_center = parts[2]  # Last part (third part)
+        return project_code, cost_center
+    else:
+        return "NO PROJECT CODE", "NO COST CENTER"
+
+
 def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
     """
     Extract relevant fields from secret scanning alerts.
@@ -156,6 +188,16 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
             if safe_get(alert, "repository", "full_name")
             else None
         ),
+        "Project_Code": lambda alert: parse_organization_name(
+            safe_get(alert, "repository", "full_name").split("/")[0]
+            if safe_get(alert, "repository", "full_name")
+            else None
+        )[0],
+        "Cost_Center": lambda alert: parse_organization_name(
+            safe_get(alert, "repository", "full_name").split("/")[0]
+            if safe_get(alert, "repository", "full_name")
+            else None
+        )[1],
         "Repository_Name": lambda alert: (
             safe_get(alert, "repository", "full_name").split("/")[1]
             if safe_get(alert, "repository", "full_name")
@@ -188,6 +230,7 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
         "Location_Blob_URL": ("first_location_detected", "blob_url"),
         # Repository admin information
         "Repository_Admins": lambda alert: None,  # To be filled later
+        "Repository_Admins_email_id": lambda alert: None,  # To be filled later
     }
     return extract_alert_data(alerts, field_mapping, "Secret Scanning")
 
@@ -385,22 +428,6 @@ def load_config() -> Tuple[str, List[str]]:
     return enterprise_slug, valid_pats
 
 
-def load_all_orgs_write_pat() -> Optional[str]:
-    """
-    Load the GH_ALL_ORGS_WRITE_PAT from environment variables.
-    This PAT is used specifically for fetching repository admins.
-
-    Returns:
-        str: The GH_ALL_ORGS_WRITE_PAT token, or None if not set
-    """
-    pat = os.getenv("GH_ALL_ORGS_WRITE_PAT")
-    if pat:
-        logging.info("Loaded GH_ALL_ORGS_WRITE_PAT for admin retrieval")
-    else:
-        logging.warning("GH_ALL_ORGS_WRITE_PAT not set, will use standard PAT for admin retrieval")
-    return pat
-
-
 @retry_on_failure()
 def fetch_commit_info(
     repo_full_name: str, blob_sha: str, pat_cycler: itertools.cycle
@@ -455,31 +482,93 @@ def fetch_commit_info(
 
 
 @retry_on_failure()
-def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle, admin_pat: Optional[str] = None) -> str:
+def fetch_user_email(
+    username: str, pat_cycler: itertools.cycle, repo_full_name: str = None
+) -> Optional[str]:
     """
-    Fetch repository administrators.
+    Fetch email address for a specific user.
+    First tries the public profile, then falls back to commit history if a repo is provided.
 
     Args:
-        repo_full_name: Full repository name (owner/repo)
+        username: GitHub username
         pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
+        repo_full_name: Optional repository name to search commit history
 
     Returns:
-        Comma-separated string of admin usernames
+        User's email address or None if not available
     """
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Use admin_pat if provided, otherwise use pat_cycler
-    if admin_pat:
-        token = admin_pat
-        logging.debug(f"Using GH_ALL_ORGS_WRITE_PAT for admin retrieval: {repo_full_name}")
-    else:
-        token = next(pat_cycler)
-        logging.debug(f"Using standard PAT (cycled) for admin retrieval: {repo_full_name}")
-    
+    token = next(pat_cycler)
+    headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        # First, try to get email from public profile
+        url = f"https://api.github.com/users/{username}"
+        response = requests.get(url, headers=headers, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        user_data = response.json()
+        email = user_data.get("email")
+
+        # If no email from profile and we have a repo, try to get it from commit history
+        if not email and repo_full_name:
+            try:
+                commits_url = f"https://api.github.com/repos/{repo_full_name}/commits"
+                params = {"author": username, "per_page": 10}
+                commits_response = requests.get(
+                    commits_url, headers=headers, params=params, timeout=TIMEOUT
+                )
+                commits_response.raise_for_status()
+
+                commits = commits_response.json()
+                # Look through recent commits for an email
+                for commit in commits:
+                    commit_email = safe_get(commit, "commit", "author", "email")
+                    # Filter out noreply emails if possible
+                    if commit_email and "@users.noreply.github.com" not in commit_email:
+                        logging.debug(
+                            f"Found email for {username} from commit history: {commit_email}"
+                        )
+                        return commit_email
+                    elif commit_email:
+                        # Save noreply email as fallback
+                        email = commit_email
+            except Exception as commit_error:
+                logging.debug(
+                    f"Failed to fetch email from commits for {username}: {commit_error}"
+                )
+
+        return email
+
+    except Exception as e:
+        logging.debug(f"Failed to fetch email for {username}: {e}")
+        return None
+
+
+@retry_on_failure()
+def fetch_repo_admins(
+    repo_full_name: str, pat_cycler: itertools.cycle
+) -> Dict[str, str]:
+    """
+    Fetch repository administrators with their email addresses.
+
+    Args:
+        repo_full_name: Full repository name (owner/repo)
+        pat_cycler: PAT cycler for authentication
+
+    Returns:
+        Dictionary with 'logins' and 'emails' keys containing comma-separated strings
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    token = next(pat_cycler)
     headers["Authorization"] = f"Bearer {token}"
 
     try:
@@ -491,15 +580,26 @@ def fetch_repo_admins(repo_full_name: str, pat_cycler: itertools.cycle, admin_pa
         response.raise_for_status()
 
         collaborators = response.json()
-        admin_logins = [
-            collab.get("login") for collab in collaborators if collab.get("login")
-        ]
+        admin_logins = []
+        admin_emails = []
 
-        return ", ".join(admin_logins) if admin_logins else None
+        for collab in collaborators:
+            if collab.get("login"):
+                admin_logins.append(collab.get("login"))
+                # Fetch detailed user info to get email (pass repo for commit history fallback)
+                email = fetch_user_email(
+                    collab.get("login"), pat_cycler, repo_full_name
+                )
+                admin_emails.append(email if email else "N/A")
+
+        return {
+            "logins": ", ".join(admin_logins) if admin_logins else None,
+            "emails": ", ".join(admin_emails) if admin_emails else None,
+        }
 
     except Exception as e:
         logging.warning(f"Failed to fetch admins for {repo_full_name}: {e}")
-        return None
+        return {"logins": None, "emails": None}
 
 
 def enrich_secret_data_with_commit_details(
@@ -551,15 +651,10 @@ def enrich_secret_data_with_commit_details(
 
 
 def enrich_secret_data_with_commit_info(
-    secret_data: List[Dict], pat_cycler: itertools.cycle, admin_pat: Optional[str] = None
+    secret_data: List[Dict], pat_cycler: itertools.cycle
 ) -> List[Dict]:
     """
     Enrich secret scanning data with repository admin information only.
-    
-    Args:
-        secret_data: List of secret scanning alerts
-        pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
     """
     logging.info("Enriching secret scanning data with repository admin information...")
 
@@ -582,7 +677,7 @@ def enrich_secret_data_with_commit_info(
     for idx, repo_full_name in enumerate(unique_repos):
         try:
             repo_admins_cache[repo_full_name] = fetch_repo_admins(
-                repo_full_name, pat_cycler, admin_pat
+                repo_full_name, pat_cycler
             )
 
             # Log progress every 10 repositories
@@ -593,7 +688,7 @@ def enrich_secret_data_with_commit_info(
 
         except Exception as e:
             logging.error(f"Error fetching admins for {repo_full_name}: {e}")
-            repo_admins_cache[repo_full_name] = None
+            repo_admins_cache[repo_full_name] = {"logins": None, "emails": None}
 
     logging.info(f"Completed fetching admin data for {len(unique_repos)} repositories")
 
@@ -606,15 +701,21 @@ def enrich_secret_data_with_commit_info(
 
             if org_name and repo_name:
                 repo_full_name = f"{org_name}/{repo_name}"
-                alert["Repository_Admins"] = repo_admins_cache.get(repo_full_name)
+                admin_data = repo_admins_cache.get(
+                    repo_full_name, {"logins": None, "emails": None}
+                )
+                alert["Repository_Admins"] = admin_data.get("logins")
+                alert["Repository_Admins_email_id"] = admin_data.get("emails")
             else:
                 alert["Repository_Admins"] = None
+                alert["Repository_Admins_email_id"] = None
 
             enriched_data.append(alert)
 
         except Exception as e:
             logging.error(f"Error mapping admin data to alert: {e}")
             alert["Repository_Admins"] = None
+            alert["Repository_Admins_email_id"] = None
             enriched_data.append(alert)
 
     logging.info(f"Completed enrichment for {len(enriched_data)} alerts")
@@ -848,9 +949,6 @@ def main():
 
         enterprise_slug, pats = load_config()
         pat_cycler = itertools.cycle(pats)
-        
-        # Load the optional ALL_ORGS_WRITE_PAT for admin retrieval
-        admin_pat = load_all_orgs_write_pat()
 
         logging.info("Fetching secret scanning alerts using REST API...")
 
@@ -905,7 +1003,7 @@ def main():
         # Enrich with admin information
         if secret_scanning_data:
             secret_scanning_data = enrich_secret_data_with_commit_info(
-                secret_scanning_data, pat_cycler, admin_pat
+                secret_scanning_data, pat_cycler
             )
 
         # Generate timestamp for this query execution
