@@ -79,17 +79,16 @@ jobs:
                   echo "Tokens configured: $(echo '${{ secrets.GH_PATS }}' | tr ',' '\n' | wc -l)"
                   echo ""
 
-                  cd scripts/fetch_languages
-                  python fetch_orgs.py
+                  python scripts/fetch_languages/fetch_orgs.py
 
                   # Check if organizations.csv was created
-                  if [ ! -f "output/organizations.csv" ]; then
+                  if [ ! -f "scripts/fetch_languages/output/organizations.csv" ]; then
                     echo "ERROR: organizations.csv was not created"
                     exit 1
                   fi
 
                   # Count organizations
-                  ORG_COUNT=$(tail -n +2 output/organizations.csv | wc -l)
+                  ORG_COUNT=$(tail -n +2 scripts/fetch_languages/output/organizations.csv | wc -l)
                   echo "Organizations fetched: $ORG_COUNT"
 
                   if [ "$ORG_COUNT" -eq 0 ]; then
@@ -138,10 +137,8 @@ jobs:
                   echo "This may take several minutes depending on enterprise size."
                   echo ""
 
-                  cd scripts/fetch_languages
-
                   # Run language analysis with timeout
-                  timeout 7200 python fetch_languages.py || {
+                  timeout 7200 python scripts/fetch_languages/fetch_languages.py || {
                     exit_code=$?
                     if [ $exit_code -eq 124 ]; then
                       echo "ERROR: Language analysis timed out after 2 hours"
