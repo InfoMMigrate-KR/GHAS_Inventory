@@ -72,10 +72,46 @@ OUTPUT_FORMAT=excel  # Options: excel, csv
 
 ## Usage
 
-### Basic Usage
+### Automated Workflow (Recommended)
 
-Run the script from the project root or scripts directory:
+The easiest way to run the complete analysis is using the automated workflow:
 
+#### Option 1: Python Workflow Script
+```bash
+python scripts/fetch_languages/run_language_analysis.py
+```
+
+#### Option 2: Windows Batch Script (Double-click or command line)
+```cmd
+run_language_analysis.bat
+```
+
+The automated workflow will:
+1. Validate prerequisites (tokens, environment variables)
+2. Fetch all organizations from your GitHub Enterprise
+3. Validate the organization data
+4. Run language analysis across all repositories
+5. Generate comprehensive reports and logs
+
+#### Workflow Features:
+- **Prerequisite Validation**: Checks .env file, tokens, and script availability
+- **CSV Validation**: Ensures organization data was fetched successfully
+- **Comprehensive Logging**: Detailed logs saved to `output/logs/workflow_execution_*.log`
+- **Error Recovery**: Clear error messages and guidance for troubleshooting
+- **Progress Tracking**: Real-time updates on workflow progress
+- **Output Summary**: Lists all generated files with sizes
+- **Cleanup**: Optional cleanup of old files (configurable)
+
+### Manual Usage
+
+You can also run the scripts individually:
+
+#### Step 1: Fetch Organizations
+```bash
+python scripts/fetch_languages/fetch_orgs.py
+```
+
+#### Step 2: Fetch Language Data
 ```bash
 python scripts/fetch_languages/fetch_languages.py
 ```
@@ -84,9 +120,12 @@ python scripts/fetch_languages/fetch_languages.py
 
 The script generates reports in `scripts/fetch_languages/output/` directory:
 
+#### Workflow Output Files:
+- `organizations.csv`: List of all GitHub Enterprise organizations
 - `languages_report_YYYYMMDD_HHMMSS.csv`: Progressive language data
 - `languages_errors_YYYYMMDD_HHMMSS.csv`: Progressive error log
 - `languages_summary_YYYYMMDD_HHMMSS.csv`: Language summary
+- `logs/workflow_execution_YYYYMMDD_HHMMSS.log`: Complete workflow log
 - `logs/language_scan_YYYYMMDD_HHMMSS.log`: Detailed execution log
 - `logs/timing_report_YYYYMMDD_HHMMSS.csv`: Per-org timing analytics
 
