@@ -6,13 +6,16 @@ GitHub Organization Package Fetcher
 This script fetches all package details from a GitHub organization and its repositories.
 It retrieves information about packages, dependencies, and repository details.
 
+Updated to use the GitHub App authentication module.
 """
 
 import requests
 import json
 import os
+import sys
 import time
 import csv
+import importlib.util
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Iterator
 import urllib3
@@ -20,9 +23,35 @@ import concurrent.futures
 from functools import lru_cache
 from itertools import islice
 import jwt
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from collections import defaultdict
+import base64
 
 from dotenv import load_dotenv
 import pandas as pd
+
+# Import the GitHub App authentication module
+script_dir = os.path.dirname(os.path.abspath(__file__))
+auth_module_path = os.path.join(script_dir, "..", "github_auth")
+if auth_module_path not in sys.path:
+    sys.path.insert(0, auth_module_path)
+
+try:
+    from github_auth import GitHubAppAuth
+except ImportError:
+    # Fallback: try direct import from the module file
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "github_app_auth", os.path.join(auth_module_path, "github_app_auth.py")
+        )
+        github_auth_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(github_auth_module)
+        GitHubAppAuth = github_auth_module.GitHubAppAuth
+    except Exception as e:
+        print(f"Error importing GitHubAppAuth: {e}")
+        print("Please ensure the github_auth module is properly installed.")
+        sys.exit(1)
 
 # Disable SSL warnings for corporate environments
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -42,125 +71,25 @@ class GitHubPackageFetcher:
         """
         self.base_url = "https://api.github.com"
         self.graphql_url = "https://api.github.com/graphql"
-        self.app_id = app_id
-        self.private_key_path = private_key_path
-        self.installation_id = None
-        self.verify_ssl = verify_ssl
-        self.session = requests.Session()
-        self.access_token = None
-        self.token_expires_at = None
 
-        # Set SSL verification
-        self.session.verify = verify_ssl
+        # Initialize the GitHub App authentication
+        self.auth = GitHubAppAuth(
+            app_id=app_id, private_key_path=private_key_path, verify_ssl=verify_ssl
+        )
+
+        self.session = None
 
     def set_installation_id(self, org_name: str) -> bool:
         """
         Set the installation ID for a specific organization
         Returns True if successful, False otherwise
         """
-        installation_id = self._get_installation_id(org_name)
-        if installation_id:
-            self.installation_id = installation_id
-            self._update_session_headers()
+        if self.auth.authenticate_for_organization(org_name):
+            self.session = self.auth.get_authenticated_session()
             return True
         return False
 
-    def _generate_jwt(self) -> str:
-        """Generate a JWT for GitHub App authentication"""
-        if not (self.app_id and self.private_key_path):
-            raise ValueError("GitHub App ID and private key path are required")
-
-        with open(self.private_key_path, "rb") as key_file:
-            private_key = key_file.read()
-
-        now = datetime.utcnow()
-        payload = {"iat": now, "exp": now + timedelta(minutes=2), "iss": self.app_id}
-
-        return jwt.encode(payload, private_key, algorithm="RS256")
-
-    def _get_installation_id(self, org_name: str) -> Optional[str]:
-        """Get the installation ID for a specific organization"""
-        jwt_token = self._generate_jwt()
-        headers = {
-            "Authorization": f"Bearer {jwt_token}",
-            "Accept": "application/vnd.github.v3+json",
-        }
-
-        # First, try to get the installation for the organization directly
-        response = requests.get(
-            f"{self.base_url}/orgs/{org_name}/installation",
-            headers=headers,
-            verify=self.verify_ssl,
-        )
-
-        if response.status_code == 200:
-            return str(response.json()["id"])
-
-        # If org installation not found, list all installations and search for the org
-        response = requests.get(
-            f"{self.base_url}/app/installations",
-            headers=headers,
-            verify=self.verify_ssl,
-        )
-
-        if response.status_code == 200:
-            installations = response.json()
-            for installation in installations:
-                if (
-                    installation.get("account", {}).get("login", "").lower()
-                    == org_name.lower()
-                ):
-                    return str(installation["id"])
-
-        print(f"Warning: No GitHub App installation found for organization: {org_name}")
-        return None
-
-    def _get_installation_token(self) -> str:
-        """Get an installation access token for the GitHub App"""
-        if not self.installation_id:
-            raise ValueError("Installation ID is required")
-
-        jwt_token = self._generate_jwt()
-        headers = {
-            "Authorization": f"Bearer {jwt_token}",
-            "Accept": "application/vnd.github.v3+json",
-        }
-
-        response = requests.post(
-            f"{self.base_url}/app/installations/{self.installation_id}/access_tokens",
-            headers=headers,
-            verify=self.verify_ssl,
-        )
-
-        if response.status_code == 201:
-            data = response.json()
-            self.access_token = data["token"]
-            # Convert expires_at string to datetime
-            self.token_expires_at = datetime.strptime(
-                data["expires_at"], "%Y-%m-%dT%H:%M:%SZ"
-            )
-            return self.access_token
-        else:
-            raise Exception(
-                f"Failed to get installation token: {response.status_code} - {response.text}"
-            )
-
-    def _update_session_headers(self):
-        """Update session headers with current installation token"""
-        # Check if we need a new token
-        if (
-            not self.access_token
-            or not self.token_expires_at
-            or datetime.utcnow() + timedelta(minutes=5) >= self.token_expires_at
-        ):
-            self.access_token = self._get_installation_token()
-
-        self.session.headers.update(
-            {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/vnd.github.v3+json",
-            }
-        )
+    # Authentication methods now handled by GitHubAppAuth class
 
     def _convert_dict_to_tuple(self, d: Optional[Dict]) -> Optional[tuple]:
         """Convert dictionary to tuple for caching"""
@@ -185,6 +114,8 @@ class GitHubPackageFetcher:
         self, url: str, params: Optional[Dict] = None
     ) -> Optional[Dict]:
         """Actual request implementation"""
+        if not self.session:
+            raise ValueError("Not authenticated. Call set_installation_id first.")
 
         try:
             response = self.session.get(url, params=params, timeout=30)
@@ -202,9 +133,9 @@ class GitHubPackageFetcher:
                     print(f"Rate limit exceeded. Waiting {wait_time} seconds...")
                     time.sleep(wait_time)
                 else:
-                    # Handle expired token
-                    print("Token may have expired, refreshing...")
-                    self._update_session_headers()
+                    # Authentication issue - refresh token
+                    print("Authentication issue detected. Refreshing token...")
+                    self.session = self.auth.get_authenticated_session()
 
                 # Retry the request with new/refreshed token
                 response = self.session.get(url, params=params, timeout=30)
@@ -243,6 +174,9 @@ class GitHubPackageFetcher:
     def _make_graphql_request(
         self, query: str, variables: Optional[Dict] = None
     ) -> Optional[Dict]:
+        if not self.session:
+            raise ValueError("Not authenticated. Call set_installation_id first.")
+
         # GraphQL request helper - Use the session headers which already have the current token
         payload = {"query": query, "variables": variables}
         try:
