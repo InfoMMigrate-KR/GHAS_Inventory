@@ -1,10 +1,15 @@
 import os
+import sys
 import time
 import requests
 import itertools
 import csv
 from datetime import datetime
 from dotenv import load_dotenv
+
+# Add the parent directory to the path to import github_auth
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from github_auth.github_app_auth import GitHubAppAuth
 
 # Load environment variables
 load_dotenv()
@@ -33,50 +38,85 @@ class EnterpriseFetcher:
         self.api_url = "https://api.github.com/graphql"
         self.slug = os.getenv("GH_ENTERPRISE_SLUG")
 
-        # Load tokens and setup iterator
-        tokens_str = os.getenv("GH_PATS")
-        if not tokens_str or not self.slug:
-            raise ValueError("Missing GH_ENTERPRISE_SLUG or GH_PATS in .env file")
+        if not self.slug:
+            raise ValueError("Missing GH_ENTERPRISE_SLUG in .env file")
 
-        self.tokens_list = [t.strip() for t in tokens_str.split(",") if t.strip()]
-        self.token_cycle = itertools.cycle(self.tokens_list)
-        self.current_token = next(self.token_cycle)
+        # Initialize GitHub App Authentication
+        self.github_app = GitHubAppAuth()
+        self.authenticated_orgs = set()
+        # Predefined list of known organizations to try for authentication
+        self.known_orgs = [
+            "im-naga-ghas",
+            "InfoMCopilot-KR",
+            "InfoMVyasVDemo",
+            "InfoMGHAS-KR",
+            "im-sandbox-kalpanarc",
+        ]
 
-        print(f"[*] Loaded {len(self.tokens_list)} tokens for Enterprise: {self.slug}")
+        print(f"[*] Initialized GitHub App authentication for Enterprise: {self.slug}")
+
+    def _ensure_authentication(self, org_login=None):
+        """
+        Ensure we have a valid authentication session.
+        For enterprise queries, we'll try known organizations for authentication.
+        """
+        if not org_login:
+            # Try known organizations until one works
+            for known_org in self.known_orgs:
+                if known_org in self.authenticated_orgs:
+                    return self.github_app.get_authenticated_session()
+
+                try:
+                    success = self.github_app.authenticate_for_organization(known_org)
+                    if success:
+                        self.authenticated_orgs.add(known_org)
+                        return self.github_app.get_authenticated_session()
+                except Exception:
+                    continue
+
+            raise ValueError("Could not authenticate with any known organization")
+
+        if org_login not in self.authenticated_orgs:
+            success = self.github_app.authenticate_for_organization(org_login)
+            if not success:
+                raise Exception(f"Failed to authenticate for organization: {org_login}")
+            self.authenticated_orgs.add(org_login)
+
+        return self.github_app.get_authenticated_session()
 
     def _get_headers(self):
+        """Get headers for GraphQL requests"""
         return {
-            "Authorization": f"Bearer {self.current_token}",
+            "Accept": "application/vnd.github.v3+json",
             "Content-Type": "application/json",
         }
 
-    def _rotate_token(self):
-        """Switches to the next token in the list."""
-        print(f"[!] Rotating token...")
-        self.current_token = next(self.token_cycle)
-
     def run_query(self, query, variables):
         """
-        Executes GraphQL query with retry logic for rate limits and auth errors.
+        Executes GraphQL query with GitHub App authentication and retry logic.
         """
-        max_retries = (
-            len(self.tokens_list) * 2
-        )  # Allow cycling through all tokens twice
+        max_retries = 3
         attempts = 0
 
         while attempts < max_retries:
             try:
-                response = requests.post(
+                # Ensure we have authentication (use default org for enterprise queries)
+                session = self._ensure_authentication()
+
+                response = session.post(
                     self.api_url,
                     json={"query": query, "variables": variables},
                     headers=self._get_headers(),
-                    timeout=10,
+                    timeout=30,
                 )
 
-                # Handle HTTP 401 (Unauthorized) or 403 (Forbidden/Rate Limit)
+                # Handle HTTP errors
                 if response.status_code in [401, 403]:
-                    print(f"[!] HTTP {response.status_code} encountered.")
-                    self._rotate_token()
+                    print(
+                        f"[!] HTTP {response.status_code} encountered. Re-authenticating..."
+                    )
+                    # Clear authentication cache and retry
+                    self.authenticated_orgs.clear()
                     attempts += 1
                     continue
 
@@ -87,7 +127,7 @@ class EnterpriseFetcher:
 
                 data = response.json()
 
-                # Check for GraphQL specific errors (secondary rate limits)
+                # Check for GraphQL specific errors
                 if "errors" in data:
                     errors = data["errors"]
                     is_rate_limit = any(
@@ -97,14 +137,11 @@ class EnterpriseFetcher:
                     )
 
                     if is_rate_limit:
-                        print("[!] GraphQL Rate Limit Hit.")
-                        self._rotate_token()
+                        print("[!] GraphQL Rate Limit Hit. Waiting...")
+                        time.sleep(60)  # Wait 1 minute for rate limit
                         attempts += 1
-                        time.sleep(1)  # Short cool-off
                         continue
                     else:
-                        # Return data even if there are non-critical errors,
-                        # but usually, we might want to raise here depending on strictness
                         print(f"[!] GraphQL Errors: {errors}")
                         return data
 
@@ -115,9 +152,7 @@ class EnterpriseFetcher:
                 attempts += 1
                 time.sleep(2)
 
-        raise Exception(
-            "Max retries exceeded. All tokens might be exhausted or invalid."
-        )
+        raise Exception("Max retries exceeded. Authentication or API issues.")
 
     def fetch_all_organizations(self):
         all_orgs = []
@@ -134,7 +169,7 @@ class EnterpriseFetcher:
             # Validation: Did we find the enterprise?
             if result.get("data", {}).get("enterprise") is None:
                 print(
-                    f"[X] Enterprise '{self.slug}' not found or token lacks permission."
+                    f"[X] Enterprise '{self.slug}' not found or authentication lacks permission."
                 )
                 return []
 
@@ -151,7 +186,7 @@ class EnterpriseFetcher:
 
         return all_orgs
 
-    def save_to_csv(self, org_list, output_dir="scripts/fetch_languages/output"):
+    def save_to_csv(self, org_list, output_dir="scripts/output"):
         """Save organization list to CSV file."""
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -186,6 +221,24 @@ class EnterpriseFetcher:
 
 if __name__ == "__main__":
     try:
+        # Check if required environment variables are set
+        required_env_vars = [
+            "GH_ENTERPRISE_SLUG",
+            "GITHUB_APP_ID",
+            "GITHUB_PRIVATE_KEY_PATH",
+        ]
+        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+
+        if missing_vars:
+            print(
+                f"[X] Missing required environment variables: {', '.join(missing_vars)}"
+            )
+            print("Please set the following in your .env file:")
+            print("- GH_ENTERPRISE_SLUG: Your GitHub enterprise slug")
+            print("- GITHUB_APP_ID: Your GitHub App ID")
+            print("- GITHUB_PRIVATE_KEY_PATH: Path to your GitHub App private key file")
+            exit(1)
+
         fetcher = EnterpriseFetcher()
         org_list = fetcher.fetch_all_organizations()
 
@@ -209,3 +262,6 @@ if __name__ == "__main__":
 
     except Exception as e:
         print(f"\n[X] Fatal Error: {e}")
+        import traceback
+
+        traceback.print_exc()
