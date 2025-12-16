@@ -49,11 +49,14 @@ if not ENTERPRISE_SLUG:
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY = int(os.getenv("RETRY_DELAY", "2"))  # seconds
 TIMEOUT = int(os.getenv("TIMEOUT", "30"))  # seconds
-MAX_CONCURRENT_ORGS = int(os.getenv("MAX_CONCURRENT_ORGS", "3"))  # Conservative for GitHub App
+MAX_CONCURRENT_ORGS = int(
+    os.getenv("MAX_CONCURRENT_ORGS", "3")
+)  # Conservative for GitHub App
 REQUEST_DELAY = float(os.getenv("REQUEST_DELAY", "1.0"))  # seconds between requests
 SESSION_POOL_SIZE = int(os.getenv("SESSION_POOL_SIZE", "10"))
 MEMORY_THRESHOLD_MB = int(os.getenv("MEMORY_THRESHOLD_MB", "1000"))
 RATE_LIMIT_BUFFER = int(os.getenv("RATE_LIMIT_BUFFER", "100"))
+
 
 # --- Performance Monitoring ---
 class PerformanceMonitor:
@@ -68,8 +71,17 @@ class PerformanceMonitor:
         self.rate_limit_hits = 0
         self.retry_attempts = 0
         self._lock = threading.Lock()
-    
-    def update_stats(self, orgs_processed=0, orgs_failed=0, repos=0, languages=0, api_calls=0, retries=0, rate_limits=0):
+
+    def update_stats(
+        self,
+        orgs_processed=0,
+        orgs_failed=0,
+        repos=0,
+        languages=0,
+        api_calls=0,
+        retries=0,
+        rate_limits=0,
+    ):
         with self._lock:
             self.organizations_processed += orgs_processed
             self.organizations_failed += orgs_failed
@@ -78,7 +90,7 @@ class PerformanceMonitor:
             self.api_requests += api_calls
             self.retry_attempts += retries
             self.rate_limit_hits += rate_limits
-    
+
     def monitor_memory(self) -> float:
         try:
             process = psutil.Process()
@@ -90,7 +102,7 @@ class PerformanceMonitor:
             return memory_mb
         except Exception:
             return 0
-    
+
     def log_summary(self):
         elapsed = time.time() - self.start_time
         logging.info("=" * 60)
@@ -99,7 +111,11 @@ class PerformanceMonitor:
         logging.info(f"Total Execution Time: {elapsed:.2f}s ({elapsed/60:.1f} minutes)")
         logging.info(f"Organizations Processed: {self.organizations_processed}")
         logging.info(f"Organizations Failed: {self.organizations_failed}")
-        logging.info(f"Success Rate: {(self.organizations_processed/(self.organizations_processed+self.organizations_failed)*100):.1f}%" if (self.organizations_processed + self.organizations_failed) > 0 else "0%")
+        logging.info(
+            f"Success Rate: {(self.organizations_processed/(self.organizations_processed+self.organizations_failed)*100):.1f}%"
+            if (self.organizations_processed + self.organizations_failed) > 0
+            else "0%"
+        )
         logging.info(f"Total Repositories: {self.total_repos}")
         logging.info(f"Total Language Records: {self.total_languages}")
         logging.info(f"API Requests Made: {self.api_requests}")
@@ -107,14 +123,25 @@ class PerformanceMonitor:
         logging.info(f"Rate Limit Hits: {self.rate_limit_hits}")
         logging.info(f"Peak Memory Usage: {self.memory_peak_mb:.1f} MB")
         if self.organizations_processed > 0:
-            logging.info(f"Average Repos per Org: {self.total_repos/self.organizations_processed:.1f}")
-            logging.info(f"Average Processing Time per Org: {elapsed/self.organizations_processed:.2f}s")
-        logging.info(f"Processing Rate: {self.total_languages/elapsed:.1f} language records per second")
+            logging.info(
+                f"Average Repos per Org: {self.total_repos/self.organizations_processed:.1f}"
+            )
+            logging.info(
+                f"Average Processing Time per Org: {elapsed/self.organizations_processed:.2f}s"
+            )
+        logging.info(
+            f"Processing Rate: {self.total_languages/elapsed:.1f} language records per second"
+        )
         logging.info("=" * 60)
 
 
-def retry_on_failure(max_retries: int = MAX_RETRIES, delay: int = RETRY_DELAY, monitor: PerformanceMonitor = None):
+def retry_on_failure(
+    max_retries: int = MAX_RETRIES,
+    delay: int = RETRY_DELAY,
+    monitor: PerformanceMonitor = None,
+):
     """Enhanced retry decorator with exponential backoff and monitoring"""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -122,49 +149,59 @@ def retry_on_failure(max_retries: int = MAX_RETRIES, delay: int = RETRY_DELAY, m
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+                except (
+                    requests.exceptions.RequestException,
+                    requests.exceptions.HTTPError,
+                ) as e:
                     last_exception = e
                     if monitor:
                         monitor.update_stats(retries=1)
-                    
+
                     if attempt < max_retries:
-                        wait_time = delay * (2 ** attempt)  # Exponential backoff
-                        logging.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                        wait_time = delay * (2**attempt)  # Exponential backoff
+                        logging.warning(
+                            f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s..."
+                        )
                         time.sleep(wait_time)
                     else:
-                        logging.error(f"All {max_retries + 1} attempts failed for {func.__name__}")
+                        logging.error(
+                            f"All {max_retries + 1} attempts failed for {func.__name__}"
+                        )
                 except Exception as e:
                     logging.error(f"Unexpected error in {func.__name__}: {e}")
                     raise
             raise last_exception
+
         return wrapper
+
     return decorator
 
 
 def create_session_with_retries() -> requests.Session:
     """Create a requests session with retry strategy and connection pooling"""
     session = requests.Session()
-    
+
     # Configure retry strategy
     retry_strategy = Retry(
         total=MAX_RETRIES,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "POST", "OPTIONS"],
-        raise_on_status=False
+        raise_on_status=False,
     )
-    
+
     # Configure adapter with connection pooling
     adapter = HTTPAdapter(
         max_retries=retry_strategy,
         pool_connections=SESSION_POOL_SIZE,
-        pool_maxsize=SESSION_POOL_SIZE
+        pool_maxsize=SESSION_POOL_SIZE,
     )
-    
+
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    
+
     return session
+
 
 # Constants
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
@@ -212,7 +249,9 @@ query($org: String!, $cursor: String) {
 
 
 class GitHubScanner:
-    def __init__(self, github_app_auth, enterprise_slug, monitor: PerformanceMonitor = None):
+    def __init__(
+        self, github_app_auth, enterprise_slug, monitor: PerformanceMonitor = None
+    ):
         self.enterprise_slug = enterprise_slug
         self.github_app_auth = github_app_auth
         self.session = None
@@ -247,6 +286,7 @@ class GitHubScanner:
             [
                 os.path.join(root_dir, "organizations.csv"),
                 os.path.join(script_dir, "organizations.csv"),
+                os.path.join(script_dir, "..", "output", "organizations.csv"),
                 os.path.join(root_dir, "output", "organizations.csv"),
                 os.path.join(script_dir, "output", "organizations.csv"),
             ]
@@ -288,7 +328,7 @@ class GitHubScanner:
                         logging.info("Successfully executed fetch_orgs.py")
                         # Check again for the CSV file in the expected location
                         output_csv = os.path.join(
-                            root_dir, "scripts", "output", "organizations.csv"
+                            script_dir, "..", "output", "organizations.csv"
                         )
                         if os.path.exists(output_csv):
                             csv_file = output_csv
@@ -343,21 +383,27 @@ class GitHubScanner:
     def check_rate_limit(self, headers: Dict[str, str]):
         """Check and handle rate limiting"""
         try:
-            self.rate_limit_remaining = int(headers.get('X-RateLimit-Remaining', 5000))
-            reset_timestamp = int(headers.get('X-RateLimit-Reset', time.time() + 3600))
+            self.rate_limit_remaining = int(headers.get("X-RateLimit-Remaining", 5000))
+            reset_timestamp = int(headers.get("X-RateLimit-Reset", time.time() + 3600))
             self.rate_limit_reset_time = datetime.fromtimestamp(reset_timestamp)
-            
+
             if self.rate_limit_remaining < RATE_LIMIT_BUFFER:
-                wait_time = (self.rate_limit_reset_time - datetime.now()).total_seconds()
+                wait_time = (
+                    self.rate_limit_reset_time - datetime.now()
+                ).total_seconds()
                 if wait_time > 0:
-                    logging.warning(f"Rate limit low ({self.rate_limit_remaining} remaining). Waiting {wait_time:.1f}s...")
+                    logging.warning(
+                        f"Rate limit low ({self.rate_limit_remaining} remaining). Waiting {wait_time:.1f}s..."
+                    )
                     self.monitor.update_stats(rate_limits=1)
                     time.sleep(min(wait_time, 900))  # Max 15 minutes
         except (ValueError, TypeError) as e:
             logging.debug(f"Could not parse rate limit headers: {e}")
 
     @retry_on_failure()
-    def fetch_repo_languages(self, org_login: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
+    def fetch_repo_languages(
+        self, org_login: str
+    ) -> Tuple[Optional[List[Dict]], Optional[str]]:
         """
         Fetches repository language data for a specific organization using GraphQL.
         Returns:
@@ -381,14 +427,16 @@ class GitHubScanner:
                     return None, f"ERROR: {error_msg}"
 
                 session = create_session_with_retries()
-                session.headers.update(self.github_app_auth.get_authenticated_session().headers)
+                session.headers.update(
+                    self.github_app_auth.get_authenticated_session().headers
+                )
                 session.headers.update({"Accept": "application/vnd.github.v3+json"})
                 self.authenticated_orgs[org_login] = session
                 logging.info(f"Created authenticated session for {org_login}")
             else:
                 session = self.authenticated_orgs[org_login]
                 logging.debug(f"Reusing authenticated session for {org_login}")
-                
+
         except Exception as e:
             error_msg = f"Failed to get authenticated session for {org_login}: {str(e)}"
             logging.error(error_msg)
@@ -403,13 +451,13 @@ class GitHubScanner:
                 try:
                     # Add request delay for rate limiting
                     time.sleep(REQUEST_DELAY)
-                    
+
                     response = session.post(
                         GITHUB_GRAPHQL_URL,
                         json={"query": QUERY_ORG_REPOS, "variables": variables},
                         timeout=TIMEOUT,
                     )
-                    
+
                     self.monitor.update_stats(api_calls=1)
                     self.check_rate_limit(response.headers)
 
@@ -426,7 +474,9 @@ class GitHubScanner:
                         logging.error(f"{org_login}: {error_msg}")
                         return None, f"ERROR: {error_msg}"
                     elif response.status_code == 404:
-                        error_msg = "Not Found - Organization may not exist or no access"
+                        error_msg = (
+                            "Not Found - Organization may not exist or no access"
+                        )
                         logging.warning(f"{org_login}: {error_msg}")
                         return None, f"ERROR: {error_msg}"
                     elif response.status_code == 429:
@@ -436,7 +486,9 @@ class GitHubScanner:
                         # Wait and retry handled by decorator
                         raise requests.exceptions.HTTPError(f"429 {error_msg}")
                     elif response.status_code not in [200, 201]:
-                        error_msg = f"HTTP {response.status_code} - {response.text[:200]}"
+                        error_msg = (
+                            f"HTTP {response.status_code} - {response.text[:200]}"
+                        )
                         logging.error(f"{org_login}: {error_msg}")
                         raise requests.exceptions.HTTPError(error_msg)
 
@@ -451,26 +503,33 @@ class GitHubScanner:
                     if "errors" in json_resp:
                         errors = json_resp["errors"]
                         error_details = []
-                        
+
                         for error in errors:
                             error_type = error.get("type", "UNKNOWN")
                             error_msg = error.get("message", "Unknown error")
                             error_details.append(f"{error_type}: {error_msg}")
-                            
+
                             # Specific error handling
                             if "RATE_LIMITED" in error_type:
-                                logging.warning(f"{org_login}: Rate limited, waiting...")
+                                logging.warning(
+                                    f"{org_login}: Rate limited, waiting..."
+                                )
                                 self.monitor.update_stats(rate_limits=1)
                                 time.sleep(60)  # Wait 1 minute for rate limit reset
                                 continue
                             elif "FORBIDDEN" in error_type or "SAML" in error_msg:
-                                logging.warning(f"{org_login}: Access restriction - {error_msg}")
+                                logging.warning(
+                                    f"{org_login}: Access restriction - {error_msg}"
+                                )
                                 self.monitor.update_stats(orgs_failed=1)
                                 return None, f"ERROR: Access restriction - {error_msg}"
                             elif "NOT_FOUND" in error_type:
                                 logging.warning(f"{org_login}: Not found - {error_msg}")
                                 self.monitor.update_stats(orgs_failed=1)
-                                return None, f"ERROR: Organization not found - {error_msg}"
+                                return (
+                                    None,
+                                    f"ERROR: Organization not found - {error_msg}",
+                                )
 
                         full_error = "; ".join(error_details)
                         logging.error(f"{org_login}: GraphQL errors - {full_error}")
@@ -479,7 +538,9 @@ class GitHubScanner:
 
                     # Validate response structure
                     if not json_resp.get("data"):
-                        error_msg = "No data in response - possible authentication issue"
+                        error_msg = (
+                            "No data in response - possible authentication issue"
+                        )
                         logging.error(f"{org_login}: {error_msg}")
                         self.monitor.update_stats(orgs_failed=1)
                         return None, f"ERROR: {error_msg}"
@@ -499,35 +560,43 @@ class GitHubScanner:
 
                         # Handle repositories with no languages
                         if not repo["languages"]["edges"]:
-                            repo_data.append({
-                                "Organization": org_login,
-                                "Repository": repo["name"],
-                                "Language": "None",
-                                "Bytes": 0,
-                                "Percentage": 0.0,
-                            })
+                            repo_data.append(
+                                {
+                                    "Organization": org_login,
+                                    "Repository": repo["name"],
+                                    "Language": "None",
+                                    "Bytes": 0,
+                                    "Percentage": 0.0,
+                                }
+                            )
                             continue
 
                         # Process language data
                         for edge in repo["languages"]["edges"]:
                             size = edge["size"]
-                            percentage = (size / total_size * 100) if total_size > 0 else 0
+                            percentage = (
+                                (size / total_size * 100) if total_size > 0 else 0
+                            )
 
-                            repo_data.append({
-                                "Organization": org_login,
-                                "Repository": repo["name"],
-                                "Language": edge["node"]["name"],
-                                "Bytes": size,
-                                "Percentage": round(percentage, 2),
-                            })
+                            repo_data.append(
+                                {
+                                    "Organization": org_login,
+                                    "Repository": repo["name"],
+                                    "Language": edge["node"]["name"],
+                                    "Bytes": size,
+                                    "Percentage": round(percentage, 2),
+                                }
+                            )
 
                     # Update pagination
                     page_info = repos_node["pageInfo"]
                     has_next = page_info["hasNextPage"]
                     cursor = page_info["endCursor"] if has_next else None
-                    
+
                     if has_next:
-                        logging.debug(f"{org_login}: Processing next page (cursor: {cursor[:10] if cursor else 'None'}...)")
+                        logging.debug(
+                            f"{org_login}: Processing next page (cursor: {cursor[:10] if cursor else 'None'}...)"
+                        )
 
                 except requests.exceptions.Timeout:
                     error_msg = f"Request timeout after {TIMEOUT}s"
@@ -548,18 +617,16 @@ class GitHubScanner:
             # Success - update stats and log results
             org_time = time.time() - org_start_time
             languages_count = len(repo_data)
-            
+
             self.monitor.update_stats(
-                orgs_processed=1, 
-                repos=repos_processed, 
-                languages=languages_count
+                orgs_processed=1, repos=repos_processed, languages=languages_count
             )
-            
+
             logging.info(
                 f"✓ {org_login}: {repos_processed} repos, {languages_count} language records "
                 f"in {org_time:.2f}s ({languages_count/org_time:.1f} records/s)"
             )
-            
+
             return repo_data, None
 
         except Exception as e:
@@ -569,12 +636,16 @@ class GitHubScanner:
             self.monitor.update_stats(orgs_failed=1)
             return None, f"ERROR: {error_msg}"
 
-    def process_organizations_concurrently(self, organizations: List[str]) -> Tuple[List[Dict], List[str]]:
+    def process_organizations_concurrently(
+        self, organizations: List[str]
+    ) -> Tuple[List[Dict], List[str]]:
         """Process multiple organizations concurrently with proper rate limiting"""
         all_repo_data = []
         error_messages = []
-        
-        def process_single_org(org_login: str) -> Tuple[str, Optional[List[Dict]], Optional[str]]:
+
+        def process_single_org(
+            org_login: str,
+        ) -> Tuple[str, Optional[List[Dict]], Optional[str]]:
             """Process a single organization and return results"""
             try:
                 data, error = self.fetch_repo_languages(org_login)
@@ -586,34 +657,39 @@ class GitHubScanner:
                 return org_login, None, f"ERROR: {error_msg}"
 
         # Use ThreadPoolExecutor for concurrent processing
-        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_ORGS, thread_name_prefix="GitHubOrg") as executor:
-            logging.info(f"Processing {len(organizations)} organizations with {MAX_CONCURRENT_ORGS} concurrent workers...")
-            
+        with ThreadPoolExecutor(
+            max_workers=MAX_CONCURRENT_ORGS, thread_name_prefix="GitHubOrg"
+        ) as executor:
+            logging.info(
+                f"Processing {len(organizations)} organizations with {MAX_CONCURRENT_ORGS} concurrent workers..."
+            )
+
             # Submit all tasks
             future_to_org = {
-                executor.submit(process_single_org, org): org 
-                for org in organizations
+                executor.submit(process_single_org, org): org for org in organizations
             }
-            
+
             # Process completed tasks
             for future in as_completed(future_to_org):
                 org_login = future_to_org[future]
                 try:
                     _, data, error = future.result()
-                    
+
                     if data:
                         all_repo_data.extend(data)
-                        logging.info(f"✓ Successfully processed {org_login}: {len(data)} language records")
+                        logging.info(
+                            f"✓ Successfully processed {org_login}: {len(data)} language records"
+                        )
                     else:
                         error_messages.append(f"{org_login}: {error}")
                         logging.warning(f"✗ Failed to process {org_login}: {error}")
-                        
+
                 except Exception as e:
                     error_msg = f"Exception in future for {org_login}: {str(e)}"
                     error_messages.append(f"{org_login}: {error_msg}")
                     logging.error(error_msg)
                     self.monitor.update_stats(orgs_failed=1)
-        
+
         return all_repo_data, error_messages
 
     def cleanup_resources(self):
@@ -624,7 +700,7 @@ class GitHubScanner:
                 logging.debug(f"Closed session for {org_login}")
             except Exception as e:
                 logging.debug(f"Error closing session for {org_login}: {e}")
-        
+
         self.authenticated_orgs.clear()
         logging.info("Cleaned up all authenticated sessions")
 
@@ -636,7 +712,7 @@ def main():
 
     # Setup enhanced logging with file output
     timestamp = start_time.strftime("%Y%m%d_%H%M%S")
-    log_dir = os.path.join(root_dir, "output", "fetch_languages", "logs")
+    log_dir = os.path.join(script_dir, "..", "output", "fetch_languages", "logs")
     os.makedirs(log_dir, exist_ok=True)
 
     # Create detailed log file
@@ -707,7 +783,7 @@ def main():
         return
 
     # Setup output files (reuse timestamp from start)
-    output_dir = os.path.join(root_dir, "output", "fetch_languages")
+    output_dir = os.path.join(script_dir, "..", "output", "fetch_languages")
     os.makedirs(output_dir, exist_ok=True)
 
     filename = os.path.join(output_dir, f"languages_report_{timestamp}.csv")
@@ -951,5 +1027,6 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Fatal error in main execution: {e}")
         import traceback
+
         logging.error(f"Traceback: {traceback.format_exc()}")
         sys.exit(1)
