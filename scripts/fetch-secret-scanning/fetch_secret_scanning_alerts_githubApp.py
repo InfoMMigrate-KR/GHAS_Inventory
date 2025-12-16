@@ -615,12 +615,7 @@ def fetch_organizations_from_csv(csv_path: str = None) -> List[str]:
         [
             os.path.join(root_dir, "organizations.csv"),
             os.path.join(script_dir, "organizations.csv"),
-            os.path.join(
-                script_dir, "..", "fetch_languages", "output", "organizations.csv"
-            ),
-            os.path.join(
-                root_dir, "scripts", "fetch_languages", "output", "organizations.csv"
-            ),
+            os.path.join(root_dir, "scripts", "output", "organizations.csv"),
         ]
     )
 
@@ -631,15 +626,55 @@ def fetch_organizations_from_csv(csv_path: str = None) -> List[str]:
             break
 
     if not csv_file:
-        logging.error(
+        logging.warning(
             f"Organizations CSV file not found. Tried locations:\n"
             + "\n".join(f"  - {p}" for p in possible_paths)
         )
-        logging.error(
-            "Please create an organizations.csv file with a 'login' column containing org names, "
-            "or run the fetch_orgs.py script first."
+        logging.info("Attempting to generate organizations.csv using fetch_orgs.py...")
+
+        # Try to run fetch_orgs.py to generate the organizations.csv file
+        fetch_orgs_path = os.path.join(
+            root_dir, "scripts", "fetch_Orgs", "fetch_orgs.py"
         )
-        return []
+        if os.path.exists(fetch_orgs_path):
+            try:
+                import subprocess
+                import sys
+
+                logging.info(f"Running fetch_orgs.py from: {fetch_orgs_path}")
+                result = subprocess.run(
+                    [sys.executable, fetch_orgs_path],
+                    capture_output=True,
+                    text=True,
+                    cwd=root_dir,
+                )
+
+                if result.returncode == 0:
+                    logging.info("Successfully executed fetch_orgs.py")
+                    # Check again for the CSV file in the expected location
+                    output_csv = os.path.join(
+                        root_dir, "scripts", "output", "organizations.csv"
+                    )
+                    if os.path.exists(output_csv):
+                        csv_file = output_csv
+                        logging.info(f"Organizations CSV file created at: {csv_file}")
+                    else:
+                        logging.error(
+                            "fetch_orgs.py completed but organizations.csv not found at expected location"
+                        )
+                else:
+                    logging.error(f"fetch_orgs.py failed with error: {result.stderr}")
+            except Exception as e:
+                logging.error(f"Failed to execute fetch_orgs.py: {e}")
+        else:
+            logging.error(f"fetch_orgs.py not found at: {fetch_orgs_path}")
+
+        if not csv_file:
+            logging.error(
+                "Please create an organizations.csv file with a 'login' column containing org names, "
+                "or ensure fetch_orgs.py is available and working properly."
+            )
+            return []
 
     logging.info(f"Reading organizations from: {csv_file}")
 
