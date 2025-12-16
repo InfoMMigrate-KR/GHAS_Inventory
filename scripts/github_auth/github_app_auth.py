@@ -68,7 +68,22 @@ class GitHubAppAuth:
         load_dotenv()
 
         self.app_id = app_id or os.getenv("GITHUB_APP_ID")
-        self.private_key_path = private_key_path or os.getenv("GITHUB_PRIVATE_KEY_PATH")
+        private_key_path_from_env = private_key_path or os.getenv(
+            "GITHUB_PRIVATE_KEY_PATH"
+        )
+
+        # If the path is relative, resolve it from the project root
+        if private_key_path_from_env and not os.path.isabs(private_key_path_from_env):
+            # Get the project root (two levels up from this file)
+            project_root = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..")
+            )
+            self.private_key_path = os.path.join(
+                project_root, private_key_path_from_env
+            )
+        else:
+            self.private_key_path = private_key_path_from_env
+
         self.verify_ssl = (
             verify_ssl
             if verify_ssl is not None
