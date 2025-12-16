@@ -32,50 +32,30 @@ from dotenv import load_dotenv
 import pandas as pd
 
 # Import the GitHub App authentication module
-script_dir = os.path.dirname(os.path.abspath(__file__))
-auth_module_path = os.path.join(script_dir, "..", "github_auth")
-if auth_module_path not in sys.path:
-    sys.path.insert(0, auth_module_path)
-
-try:
-    from github_auth import GitHubAppAuth
-except ImportError:
-    # Fallback: try direct import from the module file
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "github_app_auth", os.path.join(auth_module_path, "github_app_auth.py")
-        )
-        github_auth_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(github_auth_module)
-        GitHubAppAuth = github_auth_module.GitHubAppAuth
-    except Exception as e:
-        print(f"Error importing GitHubAppAuth: {e}")
-        print("Please ensure the github_auth module is properly installed.")
-        sys.exit(1)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from github_auth.github_app_auth import GitHubAppAuth
 
 # Disable SSL warnings for corporate environments
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 class GitHubPackageFetcher:
-    def __init__(
-        self, app_id: str = None, private_key_path: str = None, verify_ssl: bool = True
-    ):
+    def __init__(self, verify_ssl: bool = True):
         """
         Initialize the GitHub Package Fetcher using GitHub App authentication
 
         Args:
-            app_id: The GitHub App ID
-            private_key_path: Path to the GitHub App's private key file
             verify_ssl: Whether to verify SSL certificates (set to False for corporate environments)
         """
         self.base_url = "https://api.github.com"
         self.graphql_url = "https://api.github.com/graphql"
 
-        # Initialize the GitHub App authentication
-        self.auth = GitHubAppAuth(
-            app_id=app_id, private_key_path=private_key_path, verify_ssl=verify_ssl
-        )
+        # Initialize the GitHub App authentication (it reads config from environment)
+        try:
+            self.auth = GitHubAppAuth()
+        except Exception as e:
+            print(f"Error initializing GitHubAppAuth: {e}")
+            raise
 
         self.session = None
 
@@ -896,6 +876,58 @@ class GitHubPackageFetcher:
             return ""
 
 
+def create_org_access_issues_csv(timestamp: str, output_dir: str) -> str:
+    """
+    Create the org access issues CSV file with headers.
+
+    Args:
+        timestamp: Timestamp string for filename
+        output_dir: Output directory path
+
+    Returns:
+        str: Path to the created CSV file
+    """
+    try:
+        issues_file = os.path.join(
+            output_dir, f"packages_org_access_issues_{timestamp}.csv"
+        )
+        # Create file with headers
+        with open(issues_file, "w", newline="", encoding="utf-8") as f:
+            f.write("OrgName,Comment,Timestamp\n")
+        print(f"Created org access issues CSV: {issues_file}")
+        return issues_file
+    except Exception as e:
+        print(f"Error creating org access issues CSV: {e}")
+        return None
+
+
+def append_org_access_issue(csv_file: str, org_name: str, comment: str) -> bool:
+    """
+    Append an organization access issue to the CSV file in real-time.
+
+    Args:
+        csv_file: Path to the CSV file
+        org_name: Organization name
+        comment: Error/issue comment
+
+    Returns:
+        bool: True if successfully appended
+    """
+    try:
+        if csv_file and os.path.exists(csv_file):
+            timestamp = datetime.now().isoformat()
+            with open(csv_file, "a", newline="", encoding="utf-8") as f:
+                # Escape commas in the comment by wrapping in quotes if needed
+                if "," in comment or '"' in comment:
+                    comment = f'"{comment.replace(chr(34), chr(34)+chr(34))}"'
+                f.write(f"{org_name},{comment},{timestamp}\n")
+            return True
+        return False
+    except Exception as e:
+        print(f"Error appending org access issue to CSV: {e}")
+        return False
+
+
 def process_organizations(
     input_csv: str, output_dir: str, fetcher: GitHubPackageFetcher
 ) -> List[str]:
@@ -912,23 +944,47 @@ def process_organizations(
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
+    # Generate timestamp for error logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create org access issues CSV file upfront
+    org_issues_csv = create_org_access_issues_csv(timestamp, output_dir)
+
     # Read organizations from CSV
     try:
-        with open(input_csv, "r") as f:
-            organizations = [org.strip() for org in f.read().strip().split(",")]
+        organizations = []
+        with open(input_csv, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Try different possible column names
+                org_name = (
+                    row.get("login")
+                    or row.get("organization")
+                    or row.get("org")
+                    or row.get("name")
+                )
+                if org_name:
+                    organizations.append(org_name.strip())
+
         total_orgs = len(organizations)
         print(f"Found {total_orgs} organizations to process")
 
         output_files = []
+        successful_orgs = 0
+        failed_orgs = 0
+
         for index, org_name in enumerate(organizations, 1):
             print(f"\nProcessing organization {index}/{total_orgs}: {org_name}")
 
             try:
                 # Get installation ID for the organization
                 if not fetcher.set_installation_id(org_name):
-                    print(
-                        f"Skipping organization {org_name} - No GitHub App installation found"
+                    error_msg = (
+                        f"No GitHub App installation found for organization: {org_name}"
                     )
+                    print(f"Skipping organization {org_name} - {error_msg}")
+                    append_org_access_issue(org_issues_csv, org_name, error_msg)
+                    failed_orgs += 1
                     continue
 
                 package_details = fetcher.fetch_all_package_details(org_name)
@@ -936,6 +992,7 @@ def process_organizations(
                 output_file = fetcher.save_to_csv(package_details, output_dir)
                 if output_file:
                     output_files.append(output_file)
+                    successful_orgs += 1
 
                 # Print summary for this organization
                 summary = package_details["summary"]
@@ -953,8 +1010,23 @@ def process_organizations(
                 print(f"Time Taken: {summary['time_taken_seconds']} seconds")
 
             except Exception as e:
+                error_msg = f"Error processing organization: {str(e)}"
                 print(f"Error processing organization {org_name}: {e}")
+                append_org_access_issue(org_issues_csv, org_name, error_msg)
+                failed_orgs += 1
                 continue
+
+        # Print final summary
+        print("\n" + "=" * 50)
+        print("FINAL PROCESSING SUMMARY")
+        print("=" * 50)
+        print(f"Total Organizations: {total_orgs}")
+        print(f"Successful: {successful_orgs}")
+        print(f"Failed: {failed_orgs}")
+        print(f"Generated {len(output_files)} report files")
+        if org_issues_csv:
+            print(f"Access issues logged to: {org_issues_csv}")
+        print("=" * 50)
 
     except Exception as e:
         print(f"Error reading input CSV file: {e}")
@@ -969,11 +1041,86 @@ def main():
 
     # Get configuration from environment
     app_id = os.getenv("GITHUB_APP_ID")
+    print(f"GITHUB_APP_ID: {app_id}")
     private_key_path = os.getenv("GITHUB_PRIVATE_KEY_PATH")
     verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
-    input_csv = os.getenv("INPUT_CSV_PATH", "organizations.csv")
-    reports_dir = os.getenv("REPORTS_DIR", "reports")
 
+    # Use standardized output directory structure
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
+    # Change to use scripts/output instead of root/output
+    output_dir = os.path.join(script_dir, "..", "output", "fetch_packages")
+
+    # Find organizations.csv file in multiple possible locations
+    input_csv_name = "organizations.csv"
+    possible_paths = [
+        # First priority: scripts/output (consistent with other scripts)
+        os.path.join(root_dir, "scripts", "output", input_csv_name),
+        os.path.join(script_dir, "..", "output", input_csv_name),
+        # Secondary: script directory and nearby
+        os.path.join(script_dir, input_csv_name),
+        # Legacy locations for backward compatibility
+        os.path.join(root_dir, input_csv_name),
+        os.path.join(root_dir, "output", input_csv_name),
+    ]
+
+    input_csv = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            input_csv = path
+            break
+
+    if not input_csv:
+        print(f"Error: Could not find {input_csv_name} file. Tried locations:")
+        for path in possible_paths:
+            print(f"  - {path}")
+        print("Attempting to generate organizations.csv using fetch_orgs.py...")
+
+        # Try to run fetch_orgs.py to generate the organizations.csv file
+        fetch_orgs_path = os.path.join(
+            root_dir, "scripts", "fetch_Orgs", "fetch_orgs.py"
+        )
+        if os.path.exists(fetch_orgs_path):
+            try:
+                import subprocess
+
+                print(f"Running fetch_orgs.py from: {fetch_orgs_path}")
+                result = subprocess.run(
+                    [sys.executable, fetch_orgs_path],
+                    capture_output=True,
+                    text=True,
+                    cwd=root_dir,
+                )
+
+                if result.returncode == 0:
+                    print("Successfully executed fetch_orgs.py")
+                    # Check again for the CSV file in the expected location
+                    output_csv = os.path.join(
+                        root_dir, "scripts", "output", "organizations.csv"
+                    )
+                    if os.path.exists(output_csv):
+                        input_csv = output_csv
+                        print(f"Organizations CSV file created at: {input_csv}")
+                    else:
+                        print(
+                            "fetch_orgs.py completed but organizations.csv not found at expected location"
+                        )
+                else:
+                    print(f"fetch_orgs.py failed with error: {result.stderr}")
+            except Exception as e:
+                print(f"Failed to execute fetch_orgs.py: {e}")
+        else:
+            print(f"fetch_orgs.py not found at: {fetch_orgs_path}")
+
+        if not input_csv:
+            print(
+                "Please create an organizations.csv file with a 'login' column containing org names, "
+                "or ensure fetch_orgs.py is available and working properly."
+            )
+            return 1
+
+    # GitHub App credentials are now read from environment by GitHubAppAuth
+    # Verify they exist
     if not all([app_id, private_key_path]):
         print(
             "Error: GitHub App credentials are required. Please set the following environment variables:"
@@ -984,9 +1131,7 @@ def main():
 
     # Initialize fetcher with GitHub App credentials
     try:
-        fetcher = GitHubPackageFetcher(
-            app_id=app_id, private_key_path=private_key_path, verify_ssl=verify_ssl
-        )
+        fetcher = GitHubPackageFetcher(verify_ssl=verify_ssl)
     except Exception as e:
         print(f"Error initializing GitHub Package Fetcher: {e}")
         return 1
@@ -996,7 +1141,7 @@ def main():
 
     try:
         # Process all organizations
-        output_files = process_organizations(input_csv, reports_dir, fetcher)
+        output_files = process_organizations(input_csv, output_dir, fetcher)
         if output_files:
             print("\nGenerated report files:")
             for file in output_files:
