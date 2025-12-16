@@ -63,7 +63,7 @@ class GitHubScanner:
         )
 
     def get_organizations_from_csv(
-        self, csv_file_path="scripts/fetch_languages/output/organizations.csv"
+        self, csv_file_path="scripts/output/organizations.csv"
     ):
         """
         Reads organization list from CSV file.

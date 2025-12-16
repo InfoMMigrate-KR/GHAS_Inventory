@@ -24,10 +24,11 @@ A Python tool for analyzing programming languages used across all repositories i
 ## Prerequisites
 
 - Python 3.9+
-- GitHub Personal Access Token(s) with appropriate permissions:
+- GitHub App with appropriate permissions installed on your Enterprise:
   - `read:org` - Read organization data
   - `repo` - Read repository data (for private repos)
   - `read:enterprise` - Read enterprise data
+  - App must be installed on organizations within the enterprise
 
 ## Setup
 
@@ -44,6 +45,7 @@ Required packages:
 - `pandas>=2.0.0`
 - `openpyxl>=3.1.0`
 - `python-dotenv>=1.0.0`
+- `PyJWT>=2.8.0` (for GitHub App authentication)
 
 ### 2. Configure Environment Variables
 
@@ -59,16 +61,18 @@ Edit `.env` with your configuration:
 # Required: Your GitHub Enterprise slug
 GH_ENTERPRISE_SLUG=your-enterprise-slug
 
-# Required: GitHub Personal Access Token(s)
-# Single token:
-GITHUB_TOKEN=ghp_your_token_here
+# Required: GitHub App credentials
+GITHUB_APP_ID=123456
+GITHUB_PRIVATE_KEY_PATH=path/to/your/private-key.pem
 
-# Or multiple tokens (comma-separated) for better rate limit handling:
-GITHUB_TOKENS=ghp_token1,ghp_token2,ghp_token3
+# Optional: Default organization for authentication (recommended for enterprise queries)
+GITHUB_DEFAULT_ORG=your-default-org-name
 
 # Optional: Output format (default: excel)
 OUTPUT_FORMAT=excel  # Options: excel, csv
 ```
+
+**Note**: The GitHub App authentication replaces the previous Personal Access Token (PAT) method. This provides better security and more granular permissions.
 
 ## Usage
 
