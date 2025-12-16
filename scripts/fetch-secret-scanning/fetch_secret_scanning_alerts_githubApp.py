@@ -32,8 +32,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the root directory (two levels up from this script)
 root_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
 
-# Ensure output directories exist relative to script location
-output_dir = os.path.join(script_dir, "output")
+# Ensure output directories exist under scripts/output/fetch_secret_scanning
+output_dir = os.path.join(script_dir, "..", "output", "fetch_secret_scanning")
 logs_dir = os.path.join(output_dir, "logs")
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(logs_dir, exist_ok=True)
