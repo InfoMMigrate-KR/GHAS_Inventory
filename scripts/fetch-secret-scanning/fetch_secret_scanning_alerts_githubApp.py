@@ -67,6 +67,11 @@ RATE_LIMIT_BUFFER = int(
     os.getenv("RATE_LIMIT_BUFFER", "100")
 )  # Remaining requests before slowing down
 
+# Feature flags for enrichment
+ENABLE_REPO_ADMIN_ENRICHMENT = (
+    os.getenv("ENABLE_REPO_ADMIN_ENRICHMENT", "false").lower() == "true"
+)
+
 
 @dataclass
 class PerformanceMetrics:
@@ -556,6 +561,13 @@ def load_alert_config() -> Dict[str, Any]:
     if config["test_mode"]:
         logging.info(f"  - Test Org Limit: {config['test_org_limit']}")
 
+    # Log enrichment settings
+    commit_enrichment_enabled = (
+        os.getenv("ENABLE_COMMIT_ENRICHMENT", "true").lower() == "true"
+    )
+    logging.info(f"  - Commit Enrichment: {commit_enrichment_enabled}")
+    logging.info(f"  - Repo Admin Enrichment: {ENABLE_REPO_ADMIN_ENRICHMENT}")
+
     return config
 
 
@@ -861,6 +873,43 @@ def fetch_user_email(
     except Exception as e:
         logging.debug(f"Failed to fetch email for {username}: {e}")
         return None
+
+
+@retry_on_failure()
+def fetch_repository_admins(
+    repo_full_name: str, session: requests.Session
+) -> List[str]:
+    """
+    Fetch repository administrators (users with admin permissions).
+
+    Args:
+        repo_full_name: Full repository name (owner/repo)
+        session: Authenticated session
+
+    Returns:
+        List of usernames with admin permissions
+    """
+    try:
+        # Fetch collaborators with admin permission
+        url = f"https://api.github.com/repos/{repo_full_name}/collaborators"
+        params = {"permission": "admin", "per_page": 100}
+
+        response = session.get(url, params=params, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        collaborators = response.json()
+        admin_users = [
+            collaborator.get("login")
+            for collaborator in collaborators
+            if collaborator.get("login")
+        ]
+
+        logging.debug(f"Found {len(admin_users)} admin users for {repo_full_name}")
+        return admin_users
+
+    except Exception as e:
+        logging.debug(f"Failed to fetch repository admins for {repo_full_name}: {e}")
+        return []
 
 
 def enrich_secret_data_with_commit_details(
@@ -1518,7 +1567,7 @@ def enrich_organization_alerts(
     secret_scanning_data: List[Dict],
 ) -> None:
     """
-    Enrich alerts for a single organization with commit information.
+    Enrich alerts for a single organization with commit information and optional repository admin information.
     """
     logging.info(f"Enriching {len(org_alerts)} alerts for {org_name}...")
 
@@ -1527,12 +1576,16 @@ def enrich_organization_alerts(
         if github_app_auth.authenticate_for_organization(org_name):
             session = github_app_auth.get_authenticated_session()
 
+            # Cache repository admins to avoid repeated API calls for the same repo
+            repo_admin_cache = {}
+
             # Enrich alerts for this org
             for idx, alert in org_alerts:
                 try:
                     repo_full_name = f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
                     blob_sha = alert.get("Location_Blob_Sha")
 
+                    # Enrich with commit information
                     if blob_sha and repo_full_name:
                         commit_info = fetch_commit_info(
                             repo_full_name, blob_sha, session
@@ -1544,14 +1597,45 @@ def enrich_organization_alerts(
                             "committer"
                         )
                         secret_scanning_data[idx]["Commit_SHA"] = commit_info.get("sha")
+
+                    # Enrich with repository admin information if enabled
+                    if ENABLE_REPO_ADMIN_ENRICHMENT and repo_full_name:
+                        # Check cache first
+                        if repo_full_name not in repo_admin_cache:
+                            repo_admins = fetch_repository_admins(
+                                repo_full_name, session
+                            )
+                            repo_admin_cache[repo_full_name] = (
+                                ", ".join(repo_admins) if repo_admins else ""
+                            )
+
+                        secret_scanning_data[idx]["Repo_Admin"] = repo_admin_cache[
+                            repo_full_name
+                        ]
+                    elif not ENABLE_REPO_ADMIN_ENRICHMENT:
+                        # Add empty column for consistency
+                        secret_scanning_data[idx]["Repo_Admin"] = ""
+
                 except Exception as e:
                     logging.warning(f"Failed to enrich alert {idx}: {e}")
+                    # Ensure the column exists even if enrichment fails
+                    if "Repo_Admin" not in secret_scanning_data[idx]:
+                        secret_scanning_data[idx]["Repo_Admin"] = ""
         else:
             logging.warning(
                 f"Could not authenticate for {org_name} - skipping enrichment"
             )
+            # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
+            if ENABLE_REPO_ADMIN_ENRICHMENT:
+                for idx, _ in org_alerts:
+                    secret_scanning_data[idx]["Repo_Admin"] = ""
     except Exception as e:
         logging.error(f"Error enriching alerts for {org_name}: {e}")
+        # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
+        if ENABLE_REPO_ADMIN_ENRICHMENT:
+            for idx, _ in org_alerts:
+                if "Repo_Admin" not in secret_scanning_data[idx]:
+                    secret_scanning_data[idx]["Repo_Admin"] = ""
 
 
 def export_results(

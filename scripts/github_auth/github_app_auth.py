@@ -69,16 +69,46 @@ class GitHubAppAuth:
 
         self.app_id = app_id or os.getenv("GH_APP_ID")
 
-        # Get private key content directly from environment variable
-        self.private_key_content = os.getenv("GH_PRIVATE_KEY")
+        # Get private key content - can be either content or file path
+        private_key_env = os.getenv("GH_PRIVATE_KEY")
+        self.private_key_content = None
 
-        if not self.private_key_content:
-            # If not in environment, check if a file path was passed as parameter
-            if private_key_path and os.path.exists(private_key_path):
+        if private_key_env:
+            # Check if it's a file path (ends with .pem or contains file extension)
+            if (
+                private_key_env.endswith(".pem")
+                or private_key_env.endswith(".key")
+                or "." in private_key_env.split("/")[-1]
+            ):
+                # It's a file path, try to read the file
+                if os.path.exists(private_key_env):
+                    with open(private_key_env, "r") as f:
+                        self.private_key_content = f.read()
+                else:
+                    # File doesn't exist, maybe it's a relative path
+                    # Try to find it relative to the current working directory
+                    possible_paths = [
+                        private_key_env,
+                        os.path.join(os.getcwd(), private_key_env),
+                        os.path.join(
+                            os.path.dirname(__file__), "..", "..", private_key_env
+                        ),
+                    ]
+
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            with open(path, "r") as f:
+                                self.private_key_content = f.read()
+                            break
+            else:
+                # It's the actual private key content
+                self.private_key_content = private_key_env
+
+        # If still no content and a file path was passed as parameter
+        if not self.private_key_content and private_key_path:
+            if os.path.exists(private_key_path):
                 with open(private_key_path, "r") as f:
                     self.private_key_content = f.read()
-            else:
-                self.private_key_content = None
 
         self.verify_ssl = (
             verify_ssl
@@ -108,10 +138,49 @@ class GitHubAppAuth:
             )
 
         if not self.private_key_content:
+            private_key_env = os.getenv("GH_PRIVATE_KEY")
+            if private_key_env:
+                if private_key_env.endswith(".pem") or private_key_env.endswith(".key"):
+                    raise ValueError(
+                        f"GitHub App private key file not found: {private_key_env}. "
+                        f"Please ensure the file exists or set GH_PRIVATE_KEY to the actual "
+                        f"private key content (starting with '-----BEGIN PRIVATE KEY-----')"
+                    )
             raise ValueError(
                 "GitHub App private key is required. Set GH_PRIVATE_KEY environment variable "
-                "with the private key content, or pass private_key_path parameter"
+                "to either the private key file path or the actual private key content, "
+                "or pass private_key_path parameter"
             )
+
+        # Validate private key format
+        private_key_content = self.private_key_content.replace("\\n", "\n")
+        if not private_key_content.strip().startswith("-----BEGIN"):
+            raise ValueError(
+                "Private key format is invalid. It should start with '-----BEGIN' and "
+                "contain the complete private key including headers and footers. "
+                f"Current content starts with: '{private_key_content[:50]}...'"
+            )
+
+        print(f"GitHub App ID: {self.app_id}")
+        print(f"Private key loaded: {len(self.private_key_content)} characters")
+        print(f"Private key starts with: {self.private_key_content[:30]}...")
+        print(f"SSL verification: {self.verify_ssl}")
+
+    def _format_private_key(self) -> str:
+        """
+        Format the private key content to ensure proper newlines and structure
+
+        Returns:
+            str: Properly formatted private key content
+        """
+        # Replace escaped newlines with actual newlines
+        formatted_key = self.private_key_content.replace("\\n", "\n")
+
+        # Ensure the key ends with a newline
+        if not formatted_key.endswith("\n"):
+            formatted_key += "\n"
+
+        return formatted_key
 
     def _generate_jwt(self) -> str:
         """
@@ -121,8 +190,14 @@ class GitHubAppAuth:
             str: JWT token for authenticating as GitHub App
         """
         try:
-            # Use private key content directly from environment variable
-            private_key = self.private_key_content.encode("utf-8")
+            # Get properly formatted private key
+            private_key_content = self._format_private_key()
+
+            # Ensure the private key has proper format
+            if not private_key_content.startswith("-----BEGIN"):
+                raise ValueError("Private key must start with -----BEGIN")
+
+            private_key = private_key_content.encode("utf-8")
 
             now = datetime.utcnow()
             payload = {
@@ -131,9 +206,15 @@ class GitHubAppAuth:
                 "iss": self.app_id,
             }
 
-            return jwt.encode(payload, private_key, algorithm="RS256")
+            token = jwt.encode(payload, private_key, algorithm="RS256")
+            print(f"JWT generated successfully. Token length: {len(token)}")
+            return token
 
         except Exception as e:
+            print(f"JWT generation failed. Error details: {str(e)}")
+            print(
+                f"Private key preview (first 100 chars): {self.private_key_content[:100]}..."
+            )
             raise Exception(f"Failed to generate JWT: {e}")
 
     def get_installation_id(self, org_name: str) -> Optional[str]:
