@@ -34,7 +34,7 @@ Create a `.env` file in the project root with the following variables:
 ```env
 # GitHub App Configuration
 GH_APP_ID=your_app_id
-GH_PRIVATE_KEY_PATH=/path/to/your/private-key.pem
+GH_PRIVATE_KEY=/path/to/your/private-key.pem
 
 # Enterprise Configuration
 GH_ENTERPRISE_SLUG=your-enterprise-slug
@@ -204,7 +204,7 @@ Organizations not following this format will have:
 ### 2. "Failed to authenticate for organization"
 - Ensure the GitHub App is installed in that organization
 - Check that the App has the required permissions
-- Verify `GH_APP_ID` and `GH_PRIVATE_KEY_PATH` are correct
+- Verify `GH_APP_ID` and `GH_PRIVATE_KEY` are correct
 
 ### 3. Rate Limiting Issues
 - The script handles rate limits automatically

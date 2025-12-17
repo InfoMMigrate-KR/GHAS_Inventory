@@ -109,7 +109,7 @@ GH_ENTERPRISE_SLUG=your-enterprise-slug
 
 # Required: GitHub App credentials
 GH_APP_ID=123456
-GH_PRIVATE_KEY_PATH=path/to/your/private-key.pem
+GH_PRIVATE_KEY=path/to/your/private-key.pem
 
 # Optional: SSL verification (default: true)
 VERIFY_SSL=true
@@ -241,11 +241,11 @@ CSB-Demo
 
 1. **Missing Environment Variables**:
    ```
-   [X] Missing required environment variables: GH_APP_ID, GH_PRIVATE_KEY_PATH
+   [X] Missing required environment variables: GH_APP_ID, GH_PRIVATE_KEY
    Please set the following in your .env file:
    - GH_ENTERPRISE_SLUG: Your GitHub enterprise slug
    - GH_APP_ID: Your GitHub App ID
-   - GH_PRIVATE_KEY_PATH: Path to your GitHub App private key file
+   - GH_PRIVATE_KEY: Path to your GitHub App private key file
    ```
 
 2. **GitHub App Not Installed**:

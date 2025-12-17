@@ -68,7 +68,7 @@ class GitHubAppAuth:
         load_dotenv()
 
         self.app_id = app_id or os.getenv("GH_APP_ID")
-        private_key_path_from_env = private_key_path or os.getenv("GH_PRIVATE_KEY_PATH")
+        private_key_path_from_env = private_key_path or os.getenv("GH_PRIVATE_KEY")
 
         # If the path is relative, resolve it from the project root
         if private_key_path_from_env and not os.path.isabs(private_key_path_from_env):
@@ -110,7 +110,7 @@ class GitHubAppAuth:
 
         if not self.private_key_path:
             raise ValueError(
-                "GitHub App private key path is required. Set GH_PRIVATE_KEY_PATH "
+                "GitHub App private key path is required. Set GH_PRIVATE_KEY "
                 "environment variable or pass private_key_path parameter"
             )
 

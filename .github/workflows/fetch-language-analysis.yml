@@ -71,7 +71,7 @@ jobs:
           chmod 600 /tmp/github-app/private-key.pem
 
           # Set environment variable for the key path
-          echo "GH_PRIVATE_KEY_PATH=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
+          echo "GH_PRIVATE_KEY=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
 
       - name: Set enterprise slug
         run: |
@@ -96,7 +96,7 @@ jobs:
           echo "============================================"
           echo "Enterprise: ${{ vars.GH_ENTERPRISE_SLUG }}"
           echo "GitHub App ID: ${{ vars.GH_APP_ID }}"
-          echo "Private Key Path: $GH_PRIVATE_KEY_PATH"
+          echo "Private Key Path: $GH_PRIVATE_KEY"
           echo "This may take several minutes depending on enterprise size."
           echo ""
 
@@ -104,8 +104,8 @@ jobs:
           echo "Environment variables check:"
           echo "GH_ENTERPRISE_SLUG is set: $([ -n "$GH_ENTERPRISE_SLUG" ] && echo 'YES' || echo 'NO')"
           echo "GH_APP_ID is set: $([ -n "$GH_APP_ID" ] && echo 'YES' || echo 'NO')"
-          echo "GH_PRIVATE_KEY_PATH is set: $([ -n "$GH_PRIVATE_KEY_PATH" ] && echo 'YES' || echo 'NO')"
-          echo "Private key file exists: $([ -f "$GH_PRIVATE_KEY_PATH" ] && echo 'YES' || echo 'NO')"
+          echo "GH_PRIVATE_KEY is set: $([ -n "$GH_PRIVATE_KEY" ] && echo 'YES' || echo 'NO')"
+          echo "Private key file exists: $([ -f "$GH_PRIVATE_KEY" ] && echo 'YES' || echo 'NO')"
           echo ""
 
           # Run language analysis with timeout
