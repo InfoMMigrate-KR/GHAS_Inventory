@@ -43,23 +43,35 @@ jobs:
       - name: Validate environment variables
         run: |
           if [ -z "${{ vars.GH_ENTERPRISE_SLUG }}" ] && [ -z "${{ inputs.enterprise_slug }}" ]; then
-            echo "ERROR: GH_ENTERPRISE_SLUG not found in secrets and not provided as input"
+            echo "ERROR: GH_ENTERPRISE_SLUG not found in variables and not provided as input"
             exit 1
           fi
 
           if [ -z "${{ vars.GH_APP_ID }}" ]; then
-            echo "ERROR: GH_APP_ID not found in repository secrets"
-            echo "Please add your GitHub App ID to repository secrets"
+            echo "ERROR: GH_APP_ID not found in repository variables"
+            echo "Please add your GitHub App ID to repository variables"
             exit 1
           fi
 
-          if [ -z "${{ secrets.GH_PRIVATE_KEY_PATH }}" ]; then
-            echo "ERROR: GH_PRIVATE_KEY_PATH not found in repository secrets"
-            echo "Please add your GitHub App private key path to repository secrets"
+          if [ -z "${{ secrets.GH_PRIVATE_KEY }}" ]; then
+            echo "ERROR: GH_PRIVATE_KEY not found in repository secrets"
+            echo "Please add your GitHub App private key content to repository secrets"
             exit 1
           fi
 
           echo "Environment validation passed ✓"
+
+      - name: Setup GitHub App Private Key
+        run: |
+          # Create temporary directory for private key
+          mkdir -p /tmp/github-app
+
+          # Write private key content to file
+          echo "${{ secrets.GH_PRIVATE_KEY }}" > /tmp/github-app/private-key.pem
+          chmod 600 /tmp/github-app/private-key.pem
+
+          # Set environment variable for the key path
+          echo "GH_PRIVATE_KEY_PATH=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
 
       - name: Set enterprise slug
         run: |
@@ -78,15 +90,22 @@ jobs:
         env:
           GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
           GH_APP_ID: ${{ vars.GH_APP_ID }}
-          GH_PRIVATE_KEY_PATH: ${{ secrets.GH_PRIVATE_KEY_PATH }}
         run: |
           echo "============================================"
           echo "GitHub Enterprise Language Analysis"
           echo "============================================"
           echo "Enterprise: ${{ vars.GH_ENTERPRISE_SLUG }}"
           echo "GitHub App ID: ${{ vars.GH_APP_ID }}"
-          echo "Private Key Path: ${{ secrets.GH_PRIVATE_KEY_PATH }}"
+          echo "Private Key Path: $GH_PRIVATE_KEY_PATH"
           echo "This may take several minutes depending on enterprise size."
+          echo ""
+
+          # Debug: Check environment variables
+          echo "Environment variables check:"
+          echo "GH_ENTERPRISE_SLUG is set: $([ -n "$GH_ENTERPRISE_SLUG" ] && echo 'YES' || echo 'NO')"
+          echo "GH_APP_ID is set: $([ -n "$GH_APP_ID" ] && echo 'YES' || echo 'NO')"
+          echo "GH_PRIVATE_KEY_PATH is set: $([ -n "$GH_PRIVATE_KEY_PATH" ] && echo 'YES' || echo 'NO')"
+          echo "Private key file exists: $([ -f "$GH_PRIVATE_KEY_PATH" ] && echo 'YES' || echo 'NO')"
           echo ""
 
           # Run language analysis with timeout
