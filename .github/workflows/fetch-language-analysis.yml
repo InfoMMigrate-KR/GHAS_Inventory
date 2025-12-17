@@ -7,7 +7,7 @@ on:
         description: "GitHub Enterprise Slug"
         required: false
         type: string
-        default: ""
+        default: "infomagnus-partner-demo"
       cleanup_old_files:
         description: "Clean up old files (older than 7 days)"
         required: false
