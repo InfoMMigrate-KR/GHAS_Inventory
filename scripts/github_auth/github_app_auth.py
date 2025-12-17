@@ -71,7 +71,7 @@ class GitHubAppAuth:
 
         # Get private key content directly from environment variable
         self.private_key_content = os.getenv("GH_PRIVATE_KEY")
-        
+
         if not self.private_key_content:
             # If not in environment, check if a file path was passed as parameter
             if private_key_path and os.path.exists(private_key_path):
@@ -79,10 +79,13 @@ class GitHubAppAuth:
                     self.private_key_content = f.read()
             else:
                 self.private_key_content = None
+
+        self.verify_ssl = (
             verify_ssl
             if verify_ssl is not None
             else os.getenv("VERIFY_SSL", "true").lower() == "true"
         )
+
         self.base_url = base_url
 
         self.installation_id = None
@@ -119,7 +122,7 @@ class GitHubAppAuth:
         """
         try:
             # Use private key content directly from environment variable
-            private_key = self.private_key_content.encode('utf-8')
+            private_key = self.private_key_content.encode("utf-8")
 
             now = datetime.utcnow()
             payload = {
