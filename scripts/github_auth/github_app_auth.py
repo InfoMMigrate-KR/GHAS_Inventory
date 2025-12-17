@@ -68,21 +68,17 @@ class GitHubAppAuth:
         load_dotenv()
 
         self.app_id = app_id or os.getenv("GH_APP_ID")
-        private_key_path_from_env = private_key_path or os.getenv("GH_PRIVATE_KEY")
 
-        # If the path is relative, resolve it from the project root
-        if private_key_path_from_env and not os.path.isabs(private_key_path_from_env):
-            # Get the project root (two levels up from this file)
-            project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..")
-            )
-            self.private_key_path = os.path.join(
-                project_root, private_key_path_from_env
-            )
-        else:
-            self.private_key_path = private_key_path_from_env
-
-        self.verify_ssl = (
+        # Get private key content directly from environment variable
+        self.private_key_content = os.getenv("GH_PRIVATE_KEY")
+        
+        if not self.private_key_content:
+            # If not in environment, check if a file path was passed as parameter
+            if private_key_path and os.path.exists(private_key_path):
+                with open(private_key_path, "r") as f:
+                    self.private_key_content = f.read()
+            else:
+                self.private_key_content = None
             verify_ssl
             if verify_ssl is not None
             else os.getenv("VERIFY_SSL", "true").lower() == "true"
@@ -108,15 +104,10 @@ class GitHubAppAuth:
                 "or pass app_id parameter"
             )
 
-        if not self.private_key_path:
+        if not self.private_key_content:
             raise ValueError(
-                "GitHub App private key path is required. Set GH_PRIVATE_KEY "
-                "environment variable or pass private_key_path parameter"
-            )
-
-        if not os.path.exists(self.private_key_path):
-            raise FileNotFoundError(
-                f"Private key file not found: {self.private_key_path}"
+                "GitHub App private key is required. Set GH_PRIVATE_KEY environment variable "
+                "with the private key content, or pass private_key_path parameter"
             )
 
     def _generate_jwt(self) -> str:
@@ -127,8 +118,8 @@ class GitHubAppAuth:
             str: JWT token for authenticating as GitHub App
         """
         try:
-            with open(self.private_key_path, "rb") as key_file:
-                private_key = key_file.read()
+            # Use private key content directly from environment variable
+            private_key = self.private_key_content.encode('utf-8')
 
             now = datetime.utcnow()
             payload = {

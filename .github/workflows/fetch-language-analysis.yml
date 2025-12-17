@@ -63,16 +63,39 @@ jobs:
 
       - name: Setup GitHub App Private Key
         run: |
-          # Create temporary directory for private key
-          mkdir -p /tmp/github-app
+          echo "GitHub App private key configured from secrets"
+          echo "✓ Private key setup completed"
 
-          # Write private key content to file
-          echo "${{ secrets.GH_PRIVATE_KEY }}" > /tmp/github-app/private-key.pem
-          chmod 600 /tmp/github-app/private-key.pem
+      - name: Set enterprise slug
+        run: |
+          if [ -n "${{ inputs.enterprise_slug }}" ]; then
+            echo "GH_ENTERPRISE_SLUG=${{ inputs.enterprise_slug }}" >> $GITHUB_ENV
+          else
+            echo "GH_ENTERPRISE_SLUG=${{ vars.GH_ENTERPRISE_SLUG }}" >> $GITHUB_ENV
+          fi
 
-          # Set environment variables for both scripts
-          echo "GH_PRIVATE_KEY_PATH=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
-          echo "GH_PRIVATE_KEY=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
+      - name: Create output directories
+        run: |
+          mkdir -p scripts/output/fetch_languages/logs
+          mkdir -p scripts/output
+          echo "Created output directories"
+
+      - name: Fetch Organizations
+        env:
+          GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
+          GH_APP_ID: ${{ vars.GH_APP_ID }}
+          GH_PRIVATE_KEY: ${{ secrets.GH_PRIVATE_KEY }}
+        run: |
+          echo "============================================"
+          echo "Fetching Organizations"
+          echo "============================================"
+
+          # Run fetch_orgs.py to generate organizations.csv
+          python scripts/fetch_Orgs/fetch_orgs.py
+
+          # Verify the file was created
+          if [ ! -f "scripts/output/organizations.csv" ]; then
+            echo "ERROR: organizations.csv was not created by fetch_orgs.py"
             exit 1
           fi
 
@@ -91,13 +114,14 @@ jobs:
         env:
           GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
           GH_APP_ID: ${{ vars.GH_APP_ID }}
+          GH_PRIVATE_KEY: ${{ secrets.GH_PRIVATE_KEY }}
         run: |
           echo "============================================"
           echo "GitHub Enterprise Language Analysis"
           echo "============================================"
           echo "Enterprise: ${{ vars.GH_ENTERPRISE_SLUG }}"
           echo "GitHub App ID: ${{ vars.GH_APP_ID }}"
-          echo "Private Key Path: $GH_PRIVATE_KEY"
+          echo "Private Key: [CONFIGURED FROM SECRETS]"
           echo "This may take several minutes depending on enterprise size."
           echo ""
 
@@ -106,7 +130,6 @@ jobs:
           echo "GH_ENTERPRISE_SLUG is set: $([ -n "$GH_ENTERPRISE_SLUG" ] && echo 'YES' || echo 'NO')"
           echo "GH_APP_ID is set: $([ -n "$GH_APP_ID" ] && echo 'YES' || echo 'NO')"
           echo "GH_PRIVATE_KEY is set: $([ -n "$GH_PRIVATE_KEY" ] && echo 'YES' || echo 'NO')"
-          echo "Private key file exists: $([ -f "$GH_PRIVATE_KEY" ] && echo 'YES' || echo 'NO')"
           echo ""
 
           # Run language analysis with timeout
