@@ -1,293 +1,272 @@
 name: GitHub Enterprise Language Analysis
 
 on:
-    workflow_dispatch:
-        inputs:
-            enterprise_slug:
-                description: "GitHub Enterprise Slug"
-                required: false
-                type: string
-                default: ""
-            cleanup_old_files:
-                description: "Clean up old files (older than 7 days)"
-                required: false
-                type: boolean
-                default: true
-    # schedule:
-    #     # Run monthly on the 1st at 2:00 AM UTC
-    #     - cron: "0 2 1 * *"
+  workflow_dispatch:
+    inputs:
+      enterprise_slug:
+        description: "GitHub Enterprise Slug"
+        required: false
+        type: string
+        default: "infomagnus-partner-demo"
+      cleanup_old_files:
+        description: "Clean up old files (older than 7 days)"
+        required: false
+        type: boolean
+        default: true
+  # schedule:
+  #     # Run monthly on the 1st at 2:00 AM UTC
+  #     - cron: "0 2 1 * *"
 
 env:
-    PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.11"
 
 jobs:
-    language-analysis:
-        name: Enterprise Language Analysis
-        runs-on: ubuntu-latest
+  language-analysis:
+    name: Enterprise Language Analysis
+    runs-on: ubuntu-latest
 
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-            - name: Set up Python
-              uses: actions/setup-python@v4
-              with:
-                  python-version: ${{ env.PYTHON_VERSION }}
-                  cache: "pip"
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
-            - name: Install dependencies
-              run: |
-                  python -m pip install --upgrade pip
-                  pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-            - name: Validate environment variables
-              run: |
-                  if [ -z "${{ secrets.GH_ENTERPRISE_SLUG }}" ] && [ -z "${{ inputs.enterprise_slug }}" ]; then
-                    echo "ERROR: GH_ENTERPRISE_SLUG not found in secrets and not provided as input"
-                    exit 1
-                  fi
+      - name: Validate environment variables
+        run: |
+          if [ -z "${{ vars.GH_ENTERPRISE_SLUG }}" ] && [ -z "${{ inputs.enterprise_slug }}" ]; then
+            echo "ERROR: GH_ENTERPRISE_SLUG not found in variables and not provided as input"
+            exit 1
+          fi
 
-                  if [ -z "${{ secrets.GH_PATS }}" ]; then
-                    echo "ERROR: GH_PATS not found in repository secrets"
-                    echo "Please add your GitHub Personal Access Token(s) to repository secrets"
-                    exit 1
-                  fi
+          if [ -z "${{ vars.GH_APP_ID }}" ]; then
+            echo "ERROR: GH_APP_ID not found in repository variables"
+            echo "Please add your GitHub App ID to repository variables"
+            exit 1
+          fi
 
-                  echo "Environment validation passed ✓"
+          if [ -z "${{ secrets.GH_PRIVATE_KEY }}" ]; then
+            echo "ERROR: GH_PRIVATE_KEY not found in repository secrets"
+            echo "Please add your GitHub App private key content to repository secrets"
+            exit 1
+          fi
 
-            - name: Set enterprise slug
-              run: |
-                  if [ -n "${{ inputs.enterprise_slug }}" ]; then
-                    echo "GH_ENTERPRISE_SLUG=${{ inputs.enterprise_slug }}" >> $GITHUB_ENV
-                  else
-                    echo "GH_ENTERPRISE_SLUG=${{ secrets.GH_ENTERPRISE_SLUG }}" >> $GITHUB_ENV
-                  fi
+          echo "Environment validation passed ✓"
 
-            - name: Create output directories
-              run: |
-                  mkdir -p scripts/fetch_languages/output/logs
-                  echo "Created output directories"
+      - name: Setup GitHub App Private Key
+        run: |
+          echo "GitHub App private key configured from secrets"
+          echo "✓ Private key setup completed"
 
-            - name: Step 1 - Fetch Organizations
-              env:
-                  GH_PATS: ${{ secrets.GH_PATS }}
-              run: |
-                  echo "============================================"
-                  echo "STEP 1: Fetching Organizations"
-                  echo "============================================"
-                  echo "Enterprise: ${{ secrets.GH_ENTERPRISE_SLUG }}"
-                  echo "Tokens configured: $(echo '${{ secrets.GH_PATS }}' | tr ',' '\n' | wc -l)"
-                  echo ""
+      - name: Set enterprise slug
+        run: |
+          if [ -n "${{ inputs.enterprise_slug }}" ]; then
+            echo "GH_ENTERPRISE_SLUG=${{ inputs.enterprise_slug }}" >> $GITHUB_ENV
+          else
+            echo "GH_ENTERPRISE_SLUG=${{ vars.GH_ENTERPRISE_SLUG }}" >> $GITHUB_ENV
+          fi
 
-                  python scripts/fetch_languages/fetch_orgs.py
+      - name: Create output directories
+        run: |
+          mkdir -p scripts/output/fetch_languages/logs
+          mkdir -p scripts/output
+          echo "Created output directories"
 
-                  # Check if organizations.csv was created
-                  if [ ! -f "scripts/fetch_languages/output/organizations.csv" ]; then
-                    echo "ERROR: organizations.csv was not created"
-                    exit 1
-                  fi
+      - name: Fetch Organizations
+        env:
+          GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
+          GH_APP_ID: ${{ vars.GH_APP_ID }}
+          GH_PRIVATE_KEY: ${{ secrets.GH_PRIVATE_KEY }}
+        run: |
+          echo "============================================"
+          echo "Fetching Organizations"
+          echo "============================================"
 
-                  # Count organizations
-                  ORG_COUNT=$(tail -n +2 scripts/fetch_languages/output/organizations.csv | wc -l)
-                  echo "Organizations fetched: $ORG_COUNT"
+          # Run fetch_orgs.py to generate organizations.csv
+          python scripts/fetch_Orgs/fetch_orgs.py
 
-                  if [ "$ORG_COUNT" -eq 0 ]; then
-                    echo "ERROR: No organizations found in CSV"
-                    exit 1
-                  fi
+          # Verify the file was created
+          if [ ! -f "scripts/output/organizations.csv" ]; then
+            echo "ERROR: organizations.csv was not created by fetch_orgs.py"
+            exit 1
+          fi
 
-                  echo "✓ Organization fetch completed successfully"
+          # Show count of organizations
+          ORG_COUNT=$(tail -n +2 scripts/output/organizations.csv | wc -l)
+          echo "Organizations found: $ORG_COUNT"
 
-            - name: Step 2 - Validate Organization Data
-              run: |
-                  echo "============================================"
-                  echo "STEP 2: Validating Organization Data"
-                  echo "============================================"
+          if [ "$ORG_COUNT" -eq 0 ]; then
+            echo "ERROR: No organizations found in CSV"
+            exit 1
+          fi
 
-                  CSV_FILE="scripts/fetch_languages/output/organizations.csv"
+          echo "✓ Organizations fetched successfully"
 
-                  # Check file exists and has content
-                  if [ ! -s "$CSV_FILE" ]; then
-                    echo "ERROR: organizations.csv is empty or missing"
-                    exit 1
-                  fi
+      - name: Run Language Analysis
+        env:
+          GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
+          GH_APP_ID: ${{ vars.GH_APP_ID }}
+          GH_PRIVATE_KEY: ${{ secrets.GH_PRIVATE_KEY }}
+        run: |
+          echo "============================================"
+          echo "GitHub Enterprise Language Analysis"
+          echo "============================================"
+          echo "Enterprise: ${{ vars.GH_ENTERPRISE_SLUG }}"
+          echo "GitHub App ID: ${{ vars.GH_APP_ID }}"
+          echo "Private Key: [CONFIGURED FROM SECRETS]"
+          echo "This may take several minutes depending on enterprise size."
+          echo ""
 
-                  # Show first few organizations
-                  echo "Sample organizations:"
-                  head -6 "$CSV_FILE"
-                  echo ""
+          # Debug: Check environment variables
+          echo "Environment variables check:"
+          echo "GH_ENTERPRISE_SLUG is set: $([ -n "$GH_ENTERPRISE_SLUG" ] && echo 'YES' || echo 'NO')"
+          echo "GH_APP_ID is set: $([ -n "$GH_APP_ID" ] && echo 'YES' || echo 'NO')"
+          echo "GH_PRIVATE_KEY is set: $([ -n "$GH_PRIVATE_KEY" ] && echo 'YES' || echo 'NO')"
+          echo ""
 
-                  # Count total organizations
-                  TOTAL_ORGS=$(tail -n +2 "$CSV_FILE" | grep -v '^[[:space:]]*$' | wc -l)
-                  echo "Total organizations to process: $TOTAL_ORGS"
+          # Run language analysis with timeout
+          timeout 7200 python scripts/fetch_languages/fetch_languages_githubAPP.py || {
+            exit_code=$?
+            if [ $exit_code -eq 124 ]; then
+              echo "ERROR: Language analysis timed out after 2 hours"
+              exit 1
+            else
+              echo "ERROR: Language analysis failed with exit code $exit_code"
+              exit $exit_code
+            fi
+          }
 
-                  # Set environment variable for next step
-                  echo "TOTAL_ORGANIZATIONS=$TOTAL_ORGS" >> $GITHUB_ENV
-                  echo "✓ Organization data validation completed"
+          echo "✓ Language analysis completed successfully"
 
-            - name: Step 3 - Fetch Language Analysis
-              env:
-                  GH_PATS: ${{ secrets.GH_PATS }}
-                  TOTAL_ORGANIZATIONS: ${{ env.TOTAL_ORGANIZATIONS }}
-              run: |
-                  echo "============================================"
-                  echo "STEP 3: Fetching Language Analysis"
-                  echo "============================================"
-                  echo "Processing ${{ env.TOTAL_ORGANIZATIONS }} organizations..."
-                  echo "This may take several minutes depending on enterprise size."
-                  echo ""
+      - name: Validate Output Files
+        run: |
+          echo "============================================"
+          echo "Validating Output Files"
+          echo "============================================"
 
-                  # Run language analysis with timeout
-                  timeout 7200 python scripts/fetch_languages/fetch_languages.py || {
-                    exit_code=$?
-                    if [ $exit_code -eq 124 ]; then
-                      echo "ERROR: Language analysis timed out after 2 hours"
-                      exit 1
-                    else
-                      echo "ERROR: Language analysis failed with exit code $exit_code"
-                      exit $exit_code
-                    fi
-                  }
+          OUTPUT_DIR="scripts/output/fetch_languages"
 
-                  echo "✓ Language analysis completed successfully"
+          echo "Checking output files..."
 
-            - name: Step 4 - Validate Output Files
-              run: |
-                  echo "============================================"
-                  echo "STEP 4: Validating Output Files"
-                  echo "============================================"
+          # Find the latest timestamped files
+          LATEST_REPORT=$(ls -t $OUTPUT_DIR/languages_report_*.csv 2>/dev/null | head -1)
+          LATEST_SUMMARY=$(ls -t $OUTPUT_DIR/languages_summary_*.csv 2>/dev/null | head -1)
+          LATEST_ERRORS=$(ls -t $OUTPUT_DIR/languages_errors_*.csv 2>/dev/null | head -1)
 
-                  OUTPUT_DIR="scripts/fetch_languages/output"
+          # Validate timestamped files
+          if [ ! -f "$LATEST_REPORT" ]; then
+            echo "ERROR: No languages report file found"
+            exit 1
+          fi
+          echo "✓ Language report: $(basename $LATEST_REPORT)"
 
-                  # Check for required output files
-                  REQUIRED_FILES=(
-                    "organizations.csv"
-                  )
+          if [ ! -f "$LATEST_SUMMARY" ]; then
+            echo "WARNING: No summary report found (may be expected if no data)"
+          else
+            echo "✓ Language summary: $(basename $LATEST_SUMMARY)"
+          fi
 
-                  # Find the latest timestamped files
-                  LATEST_REPORT=$(ls -t $OUTPUT_DIR/languages_report_*.csv 2>/dev/null | head -1)
-                  LATEST_SUMMARY=$(ls -t $OUTPUT_DIR/languages_summary_*.csv 2>/dev/null | head -1)
-                  LATEST_ERRORS=$(ls -t $OUTPUT_DIR/languages_errors_*.csv 2>/dev/null | head -1)
+          if [ ! -f "$LATEST_ERRORS" ]; then
+            echo "WARNING: No errors file found"
+          else
+            echo "✓ Errors log: $(basename $LATEST_ERRORS)"
+          fi
 
-                  echo "Checking output files..."
+          echo "✓ Output validation completed"
 
-                  # Validate basic files
-                  for file in "${REQUIRED_FILES[@]}"; do
-                    if [ ! -f "$OUTPUT_DIR/$file" ]; then
-                      echo "ERROR: Required file $file not found"
-                      exit 1
-                    fi
-                    echo "✓ $file exists"
-                  done
+      - name: Generate Workflow Summary
+        run: |
+          echo "============================================"
+          echo "WORKFLOW SUMMARY"
+          echo "============================================"
 
-                  # Validate timestamped files
-                  if [ ! -f "$LATEST_REPORT" ]; then
-                    echo "ERROR: No languages report file found"
-                    exit 1
-                  fi
-                  echo "✓ Language report: $(basename $LATEST_REPORT)"
+          OUTPUT_DIR="scripts/output/fetch_languages"
 
-                  if [ ! -f "$LATEST_SUMMARY" ]; then
-                    echo "WARNING: No summary report found (may be expected if no data)"
-                  else
-                    echo "✓ Language summary: $(basename $LATEST_SUMMARY)"
-                  fi
+          echo "Enterprise: ${{ vars.GH_ENTERPRISE_SLUG }}"
+          echo "Workflow completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
 
-                  if [ ! -f "$LATEST_ERRORS" ]; then
-                    echo "WARNING: No errors file found"
-                  else
-                    echo "✓ Errors log: $(basename $LATEST_ERRORS)"
-                  fi
+          echo "Generated Files:"
+          echo "----------------"
 
-                  echo "✓ Output validation completed"
+          # List all output files with sizes
+          find "$OUTPUT_DIR" -type f -name "*.csv" -o -name "*.log" | sort | while read file; do
+            size=$(du -h "$file" | cut -f1)
+            rel_path=$(basename "$file")
+            echo "  $rel_path ($size)"
+          done
 
-            - name: Generate Workflow Summary
-              env:
-                  TOTAL_ORGANIZATIONS: ${{ env.TOTAL_ORGANIZATIONS }}
-              run: |
-                  echo "============================================"
-                  echo "WORKFLOW SUMMARY"
-                  echo "============================================"
+          # Count language records if summary exists
+          LATEST_SUMMARY=$(ls -t $OUTPUT_DIR/languages_summary_*.csv 2>/dev/null | head -1)
+          if [ -f "$LATEST_SUMMARY" ]; then
+            LANG_COUNT=$(tail -n +2 "$LATEST_SUMMARY" | wc -l)
+            echo ""
+            echo "Languages detected: $LANG_COUNT"
+          fi
 
-                  OUTPUT_DIR="scripts/fetch_languages/output"
+          # Check for errors
+          LATEST_ERRORS=$(ls -t $OUTPUT_DIR/languages_errors_*.csv 2>/dev/null | head -1)
+          if [ -f "$LATEST_ERRORS" ]; then
+            ERROR_COUNT=$(tail -n +2 "$LATEST_ERRORS" | wc -l)
+            if [ "$ERROR_COUNT" -gt 0 ]; then
+              echo ""
+              echo "⚠️  Organizations with errors: $ERROR_COUNT"
+              echo "Check the artifacts for detailed error information."
+            fi
+          fi
 
-                  echo "Enterprise: ${{ secrets.GH_ENTERPRISE_SLUG }}"
-                  echo "Organizations processed: ${{ env.TOTAL_ORGANIZATIONS }}"
-                  echo "Workflow completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-                  echo ""
+          echo ""
+          echo "🎉 Language analysis workflow completed successfully!"
 
-                  echo "Generated Files:"
-                  echo "----------------"
+      - name: Clean up old files
+        if: ${{ inputs.cleanup_old_files == true }}
+        run: |
+          echo "============================================"
+          echo "CLEANING UP OLD FILES"
+          echo "============================================"
 
-                  # List all output files with sizes
-                  find "$OUTPUT_DIR" -type f -name "*.csv" -o -name "*.log" | sort | while read file; do
-                    size=$(du -h "$file" | cut -f1)
-                    rel_path=$(basename "$file")
-                    echo "  $rel_path ($size)"
-                  done
+          OUTPUT_DIR="scripts/output/fetch_languages"
 
-                  # Count language records if summary exists
-                  LATEST_SUMMARY=$(ls -t $OUTPUT_DIR/languages_summary_*.csv 2>/dev/null | head -1)
-                  if [ -f "$LATEST_SUMMARY" ]; then
-                    LANG_COUNT=$(tail -n +2 "$LATEST_SUMMARY" | wc -l)
-                    echo ""
-                    echo "Languages detected: $LANG_COUNT"
-                  fi
+          # Find files older than 7 days (exclude organizations.csv)
+          OLD_FILES=$(find "$OUTPUT_DIR" -type f -mtime +7 ! -name "organizations.csv" 2>/dev/null || true)
 
-                  # Check for errors
-                  LATEST_ERRORS=$(ls -t $OUTPUT_DIR/languages_errors_*.csv 2>/dev/null | head -1)
-                  if [ -f "$LATEST_ERRORS" ]; then
-                    ERROR_COUNT=$(tail -n +2 "$LATEST_ERRORS" | wc -l)
-                    if [ "$ERROR_COUNT" -gt 0 ]; then
-                      echo ""
-                      echo "⚠️  Organizations with errors: $ERROR_COUNT"
-                      echo "Check the artifacts for detailed error information."
-                    fi
-                  fi
+          if [ -n "$OLD_FILES" ]; then
+            echo "Removing old files:"
+            echo "$OLD_FILES" | while read file; do
+              echo "  Removing: $(basename "$file")"
+              rm -f "$file"
+            done
+            
+            CLEANED_COUNT=$(echo "$OLD_FILES" | wc -l)
+            echo "✓ Cleaned up $CLEANED_COUNT old files"
+          else
+            echo "No old files to clean up"
+          fi
 
-                  echo ""
-                  echo "🎉 Language analysis workflow completed successfully!"
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: language-analysis-results-${{ github.run_number }}
+          path: |
+            scripts/output/fetch_languages/*.csv
+            scripts/output/fetch_languages/logs/*.log
+            scripts/output/fetch_languages/logs/*.csv
+            scripts/output/organizations.csv
+          retention-days: 30
 
-            - name: Clean up old files
-              if: ${{ inputs.cleanup_old_files == true }}
-              run: |
-                  echo "============================================"
-                  echo "CLEANING UP OLD FILES"
-                  echo "============================================"
-
-                  OUTPUT_DIR="scripts/fetch_languages/output"
-
-                  # Find files older than 7 days (exclude organizations.csv)
-                  OLD_FILES=$(find "$OUTPUT_DIR" -type f -mtime +7 ! -name "organizations.csv" 2>/dev/null || true)
-
-                  if [ -n "$OLD_FILES" ]; then
-                    echo "Removing old files:"
-                    echo "$OLD_FILES" | while read file; do
-                      echo "  Removing: $(basename "$file")"
-                      rm -f "$file"
-                    done
-                    
-                    CLEANED_COUNT=$(echo "$OLD_FILES" | wc -l)
-                    echo "✓ Cleaned up $CLEANED_COUNT old files"
-                  else
-                    echo "No old files to clean up"
-                  fi
-
-            - name: Upload artifacts
-              uses: actions/upload-artifact@v4
-              if: always()
-              with:
-                  name: language-analysis-results-${{ github.run_number }}
-                  path: |
-                      scripts/fetch_languages/output/*.csv
-                      scripts/fetch_languages/output/logs/*.log
-                      scripts/fetch_languages/output/logs/*.csv
-                  retention-days: 30
-
-            - name: Upload organizations list
-              uses: actions/upload-artifact@v4
-              if: success()
-              with:
-                  name: organizations-list-${{ github.run_number }}
-                  path: scripts/fetch_languages/output/organizations.csv
-                  retention-days: 90
+      - name: Upload organizations list
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: organizations-list-${{ github.run_number }}
+          path: scripts/output/organizations.csv
+          retention-days: 90

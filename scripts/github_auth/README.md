@@ -24,8 +24,8 @@ Set these environment variables in your `.env` file or system environment:
 
 ```bash
 # Required
-GITHUB_APP_ID=your_github_app_id
-GITHUB_PRIVATE_KEY_PATH=path/to/your/private/key.pem
+GH_APP_ID=your_GH_APP_ID
+GH_PRIVATE_KEY=path/to/your/private/key.pem
 
 # Optional
 VERIFY_SSL=true  # Set to false for corporate environments with SSL issues

@@ -224,8 +224,8 @@ if __name__ == "__main__":
         # Check if required environment variables are set
         required_env_vars = [
             "GH_ENTERPRISE_SLUG",
-            "GITHUB_APP_ID",
-            "GITHUB_PRIVATE_KEY_PATH",
+            "GH_APP_ID",
+            "GH_PRIVATE_KEY",
         ]
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 
@@ -235,8 +235,8 @@ if __name__ == "__main__":
             )
             print("Please set the following in your .env file:")
             print("- GH_ENTERPRISE_SLUG: Your GitHub enterprise slug")
-            print("- GITHUB_APP_ID: Your GitHub App ID")
-            print("- GITHUB_PRIVATE_KEY_PATH: Path to your GitHub App private key file")
+            print("- GH_APP_ID: Your GitHub App ID")
+            print("- GH_PRIVATE_KEY: Path to your GitHub App private key file")
             exit(1)
 
         fetcher = EnterpriseFetcher()
