@@ -70,21 +70,22 @@ jobs:
           echo "${{ secrets.GH_PRIVATE_KEY }}" > /tmp/github-app/private-key.pem
           chmod 600 /tmp/github-app/private-key.pem
 
-          # Set environment variable for the key path
+          # Set environment variables for both scripts
+          echo "GH_PRIVATE_KEY_PATH=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
           echo "GH_PRIVATE_KEY=/tmp/github-app/private-key.pem" >> $GITHUB_ENV
-
-      - name: Set enterprise slug
-        run: |
-          if [ -n "${{ inputs.enterprise_slug }}" ]; then
-            echo "GH_ENTERPRISE_SLUG=${{ inputs.enterprise_slug }}" >> $GITHUB_ENV
-          else
-            echo "GH_ENTERPRISE_SLUG=${{ vars.GH_ENTERPRISE_SLUG }}" >> $GITHUB_ENV
+            exit 1
           fi
 
-      - name: Create output directories
-        run: |
-          mkdir -p scripts/output/fetch_languages/logs
-          echo "Created output directories"
+          # Show count of organizations
+          ORG_COUNT=$(tail -n +2 scripts/output/organizations.csv | wc -l)
+          echo "Organizations found: $ORG_COUNT"
+
+          if [ "$ORG_COUNT" -eq 0 ]; then
+            echo "ERROR: No organizations found in CSV"
+            exit 1
+          fi
+
+          echo "✓ Organizations fetched successfully"
 
       - name: Run Language Analysis
         env:
