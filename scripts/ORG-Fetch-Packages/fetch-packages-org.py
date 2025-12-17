@@ -1040,9 +1040,9 @@ def main():
     load_dotenv()
 
     # Get configuration from environment
-    app_id = os.getenv("GITHUB_APP_ID")
-    print(f"GITHUB_APP_ID: {app_id}")
-    private_key_path = os.getenv("GITHUB_PRIVATE_KEY_PATH")
+    app_id = os.getenv("GH_APP_ID")
+    print(f"GH_APP_ID: {app_id}")
+    private_key_path = os.getenv("GH_PRIVATE_KEY_PATH")
     verify_ssl = os.getenv("VERIFY_SSL", "true").lower() == "true"
 
     # Use standardized output directory structure
@@ -1125,8 +1125,8 @@ def main():
         print(
             "Error: GitHub App credentials are required. Please set the following environment variables:"
         )
-        print("- GITHUB_APP_ID: The GitHub App ID")
-        print("- GITHUB_PRIVATE_KEY_PATH: Path to the GitHub App's private key file")
+        print("- GH_APP_ID: The GitHub App ID")
+        print("- GH_PRIVATE_KEY_PATH: Path to the GitHub App's private key file")
         return 1
 
     # Initialize fetcher with GitHub App credentials

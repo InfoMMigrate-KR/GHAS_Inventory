@@ -62,8 +62,8 @@ Edit `.env` with your configuration:
 GH_ENTERPRISE_SLUG=your-enterprise-slug
 
 # Required: GitHub App credentials
-GITHUB_APP_ID=123456
-GITHUB_PRIVATE_KEY_PATH=path/to/your/private-key.pem
+GH_APP_ID=123456
+GH_PRIVATE_KEY_PATH=path/to/your/private-key.pem
 
 # Optional: Default organization for authentication (recommended for enterprise queries)
 GITHUB_DEFAULT_ORG=your-default-org-name

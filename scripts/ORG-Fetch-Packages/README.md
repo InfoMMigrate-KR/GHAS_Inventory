@@ -64,16 +64,16 @@ Before using this tool, you need to create and configure a GitHub App:
    - You can install it on specific repositories or all repositories in the organization
 
 5. **Configure Environment Variables**:
-   - Set `GITHUB_APP_ID` to your app's ID
-   - Set `GITHUB_PRIVATE_KEY_PATH` to the path of your downloaded `.pem` file
+   - Set `GH_APP_ID` to your app's ID
+   - Set `GH_PRIVATE_KEY_PATH` to the path of your downloaded `.pem` file
 
 ## Configuration
 
 1. Create a `.env` file with the following variables:
 ```properties
 # GitHub App Configuration
-GITHUB_APP_ID="your_github_app_id"
-GITHUB_PRIVATE_KEY_PATH="path/to/your/private-key.pem"
+GH_APP_ID="your_GH_APP_ID"
+GH_PRIVATE_KEY_PATH="path/to/your/private-key.pem"
 
 # SSL Verification (set to false for corporate environments with self-signed certs)
 VERIFY_SSL=true
@@ -171,7 +171,7 @@ This CSV output is particularly useful for:
 
 1. **GitHub App Authentication Issues**
    - Error: `GitHub App credentials are required`
-   - Solution: Ensure `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY_PATH` are set in your `.env` file
+   - Solution: Ensure `GH_APP_ID` and `GH_PRIVATE_KEY_PATH` are set in your `.env` file
    - Verify the private key file path is correct and accessible
 
 2. **Installation Not Found**
