@@ -228,9 +228,10 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
         "Location_End_Column": ("first_location_detected", "end_column"),
         "Location_Blob_Sha": ("first_location_detected", "blob_sha"),
         "Location_Blob_URL": ("first_location_detected", "blob_url"),
-        # Repository admin information
-        "Repository_Admins": lambda alert: None,  # To be filled later
-        "Repository_Admins_email_id": lambda alert: None,  # To be filled later
+        # Commit author information
+        "Commit_Author": lambda alert: None,
+        "Commit_Committer": lambda alert: None,
+        "Commit_SHA": lambda alert: None,
     }
     return extract_alert_data(alerts, field_mapping, "Secret Scanning")
 
@@ -549,59 +550,6 @@ def fetch_user_email(
         return None
 
 
-@retry_on_failure()
-def fetch_repo_admins(
-    repo_full_name: str, pat_cycler: itertools.cycle
-) -> Dict[str, str]:
-    """
-    Fetch repository administrators with their email addresses.
-
-    Args:
-        repo_full_name: Full repository name (owner/repo)
-        pat_cycler: PAT cycler for authentication
-
-    Returns:
-        Dictionary with 'logins' and 'emails' keys containing comma-separated strings
-    """
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    token = next(pat_cycler)
-    headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        # Fetch collaborators with admin permissions
-        url = f"https://api.github.com/repos/{repo_full_name}/collaborators"
-        params = {"permission": "admin", "per_page": 100}
-
-        response = requests.get(url, headers=headers, params=params, timeout=TIMEOUT)
-        response.raise_for_status()
-
-        collaborators = response.json()
-        admin_logins = []
-        admin_emails = []
-
-        for collab in collaborators:
-            if collab.get("login"):
-                admin_logins.append(collab.get("login"))
-                # Fetch detailed user info to get email (pass repo for commit history fallback)
-                email = fetch_user_email(
-                    collab.get("login"), pat_cycler, repo_full_name
-                )
-                admin_emails.append(email if email else "N/A")
-
-        return {
-            "logins": ", ".join(admin_logins) if admin_logins else None,
-            "emails": ", ".join(admin_emails) if admin_emails else None,
-        }
-
-    except Exception as e:
-        logging.warning(f"Failed to fetch admins for {repo_full_name}: {e}")
-        return {"logins": None, "emails": None}
-
-
 def enrich_secret_data_with_commit_details(
     secret_data: List[Dict], pat_cycler: itertools.cycle
 ) -> List[Dict]:
@@ -647,78 +595,6 @@ def enrich_secret_data_with_commit_details(
             enriched_data.append(alert)  # Add original alert even if enrichment fails
 
     logging.info(f"Completed commit enrichment for {len(enriched_data)} alerts")
-    return enriched_data
-
-
-def enrich_secret_data_with_commit_info(
-    secret_data: List[Dict], pat_cycler: itertools.cycle
-) -> List[Dict]:
-    """
-    Enrich secret scanning data with repository admin information only.
-    """
-    logging.info("Enriching secret scanning data with repository admin information...")
-
-    if not secret_data:
-        return secret_data
-
-    # Step 1: Collect all unique repositories
-    unique_repos = set()
-    for alert in secret_data:
-        org_name = alert.get("Organization_Name")
-        repo_name = alert.get("Repository_Name")
-        if org_name and repo_name:
-            repo_full_name = f"{org_name}/{repo_name}"
-            unique_repos.add(repo_full_name)
-
-    logging.info(f"Found {len(unique_repos)} unique repositories to process")
-
-    # Step 2: Fetch repository admin data for all unique repos
-    repo_admins_cache = {}
-    for idx, repo_full_name in enumerate(unique_repos):
-        try:
-            repo_admins_cache[repo_full_name] = fetch_repo_admins(
-                repo_full_name, pat_cycler
-            )
-
-            # Log progress every 10 repositories
-            if (idx + 1) % 10 == 0:
-                logging.info(
-                    f"Fetched admin data for {idx + 1}/{len(unique_repos)} repositories..."
-                )
-
-        except Exception as e:
-            logging.error(f"Error fetching admins for {repo_full_name}: {e}")
-            repo_admins_cache[repo_full_name] = {"logins": None, "emails": None}
-
-    logging.info(f"Completed fetching admin data for {len(unique_repos)} repositories")
-
-    # Step 3: Map admin data back to all alerts
-    enriched_data = []
-    for alert in secret_data:
-        try:
-            org_name = alert.get("Organization_Name")
-            repo_name = alert.get("Repository_Name")
-
-            if org_name and repo_name:
-                repo_full_name = f"{org_name}/{repo_name}"
-                admin_data = repo_admins_cache.get(
-                    repo_full_name, {"logins": None, "emails": None}
-                )
-                alert["Repository_Admins"] = admin_data.get("logins")
-                alert["Repository_Admins_email_id"] = admin_data.get("emails")
-            else:
-                alert["Repository_Admins"] = None
-                alert["Repository_Admins_email_id"] = None
-
-            enriched_data.append(alert)
-
-        except Exception as e:
-            logging.error(f"Error mapping admin data to alert: {e}")
-            alert["Repository_Admins"] = None
-            alert["Repository_Admins_email_id"] = None
-            enriched_data.append(alert)
-
-    logging.info(f"Completed enrichment for {len(enriched_data)} alerts")
     return enriched_data
 
 
@@ -1000,9 +876,9 @@ def main():
         logging.info("Processing secret scanning alert data...")
         secret_scanning_data = extract_secret_scanning_data(secret_scanning_alerts)
 
-        # Enrich with admin information
+        # Enrich with commit author information
         if secret_scanning_data:
-            secret_scanning_data = enrich_secret_data_with_commit_info(
+            secret_scanning_data = enrich_secret_data_with_commit_details(
                 secret_scanning_data, pat_cycler
             )
 

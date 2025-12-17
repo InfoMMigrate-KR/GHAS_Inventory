@@ -1,0 +1,12 @@
+# GitHub App Authentication Module Requirements
+# 
+# Install these dependencies to use the authentication module:
+# pip install -r requirements.txt
+
+# Core dependencies
+requests>=2.25.1
+PyJWT>=2.4.0
+python-dotenv>=0.19.0
+
+# Optional: For handling SSL issues in corporate environments
+urllib3>=1.26.0
