@@ -64,7 +64,7 @@ MEMORY_THRESHOLD_MB = int(
     os.getenv("MEMORY_THRESHOLD_MB", "1000")
 )  # Memory usage warning threshold
 RATE_LIMIT_BUFFER = int(
-    os.getenv("RATE_LIMIT_BUFFER", "100")
+    os.getenv("RATE_LIMIT_BUFFER", "100") or "100"
 )  # Remaining requests before slowing down
 
 # Feature flags for enrichment
@@ -694,17 +694,29 @@ def fetch_organizations_from_csv(csv_path: str = None) -> List[str]:
     organizations = []
     try:
         with open(csv_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Try different possible column names
-                org_name = (
-                    row.get("login")
-                    or row.get("organization")
-                    or row.get("org")
-                    or row.get("name")
-                )
-                if org_name:
-                    organizations.append(org_name.strip())
+            # First, try reading as CSV with headers
+            first_line = f.readline().strip()
+            f.seek(0)  # Reset to beginning
+            
+            # Check if first line looks like a header
+            if first_line.lower() in ['login', 'organization', 'org', 'name']:
+                # Has header, use DictReader
+                reader = csv.DictReader(f)
+                for row in reader:
+                    org_name = (
+                        row.get("login")
+                        or row.get("organization")
+                        or row.get("org")
+                        or row.get("name")
+                    )
+                    if org_name:
+                        organizations.append(org_name.strip())
+            else:
+                # No header, read as plain CSV (each line is an org name)
+                reader = csv.reader(f)
+                for row in reader:
+                    if row and row[0].strip():
+                        organizations.append(row[0].strip())
 
         logging.info(f"Loaded {len(organizations)} organizations from CSV")
         return organizations
@@ -975,7 +987,10 @@ def check_rate_limit(response: requests.Response, metrics: PerformanceMetrics) -
     if remaining:
         try:
             remaining_count = int(remaining)
-            if remaining_count < RATE_LIMIT_BUFFER:
+            # Ensure RATE_LIMIT_BUFFER is an int
+            buffer = int(RATE_LIMIT_BUFFER) if isinstance(RATE_LIMIT_BUFFER, str) else RATE_LIMIT_BUFFER
+            
+            if remaining_count < buffer:
                 if reset_time:
                     reset_timestamp = int(reset_time)
                     current_time = int(time.time())
@@ -987,7 +1002,8 @@ def check_rate_limit(response: requests.Response, metrics: PerformanceMetrics) -
                 else:
                     # Default wait if no reset time
                     time.sleep(60)
-        except ValueError:
+        except (ValueError, TypeError) as e:
+            logging.debug(f"Error parsing rate limit headers: {e}")
             pass
 
 
