@@ -64,7 +64,7 @@ MEMORY_THRESHOLD_MB = int(
     os.getenv("MEMORY_THRESHOLD_MB", "1000")
 )  # Memory usage warning threshold
 RATE_LIMIT_BUFFER = int(
-    os.getenv("RATE_LIMIT_BUFFER", "100") or "100"
+    os.getenv("RATE_LIMIT_BUFFER") or "100"
 )  # Remaining requests before slowing down
 
 # Feature flags for enrichment
@@ -121,6 +121,7 @@ def validate_configuration() -> bool:
         "TIMEOUT": (10, 300),
         "MAX_CONCURRENT_ORGS": (1, 20),
         "CHUNK_SIZE": (100, 10000),
+        "RATE_LIMIT_BUFFER": (10, 1000),
     }
 
     for var, (min_val, max_val) in numeric_configs.items():
@@ -953,8 +954,11 @@ def check_rate_limit(response: requests.Response, metrics: PerformanceMetrics) -
     if remaining:
         try:
             remaining_count = int(remaining)
-            # Ensure RATE_LIMIT_BUFFER is an int
-            buffer = int(RATE_LIMIT_BUFFER) if isinstance(RATE_LIMIT_BUFFER, str) else RATE_LIMIT_BUFFER
+            # Ensure RATE_LIMIT_BUFFER is always an int
+            try:
+                buffer = int(RATE_LIMIT_BUFFER)
+            except (ValueError, TypeError):
+                buffer = 100  # Default fallback
             
             if remaining_count < buffer:
                 if reset_time:
@@ -1063,8 +1067,28 @@ def fetch_all_pages(
             logging.error(f"HTTP Error {status_code} fetching {url}: {error_msg[:200]}")
 
             # Don't retry on client errors (4xx) except rate limiting
-            if status_code == 403 or status_code == 429:
-                # Rate limited - check if we should wait
+            if status_code == 403:
+                # Check if it's a rate limit or permission issue
+                if "rate limit" in error_msg.lower():
+                    retry_after = e.response.headers.get("Retry-After")
+                    if retry_after:
+                        wait_time = int(retry_after)
+                        logging.warning(
+                            f"Rate limited. Waiting {wait_time}s before retry..."
+                        )
+                        time.sleep(wait_time)
+                        continue  # Try again
+                else:
+                    # Permission error - provide helpful message
+                    logging.error(
+                        f"Permission denied (403) for {endpoint_url}. "
+                        f"Ensure GitHub App has 'Secret scanning alerts: Read' permission "
+                        f"and is installed in the organization."
+                    )
+                    break
+            
+            if status_code == 429:
+                # Rate limited
                 retry_after = e.response.headers.get("Retry-After")
                 if retry_after:
                     wait_time = int(retry_after)
@@ -1075,7 +1099,7 @@ def fetch_all_pages(
                     continue  # Try again
 
             if 400 <= status_code < 500:
-                logging.error(f"Client error - stopping pagination for {endpoint_url}")
+                logging.error(f"Client error {status_code} - stopping pagination for {endpoint_url}")
                 break
 
             # Let the retry decorator handle 5xx errors
