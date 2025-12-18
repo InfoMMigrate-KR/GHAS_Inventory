@@ -954,17 +954,29 @@ def process_organizations(
     try:
         organizations = []
         with open(input_csv, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Try different possible column names
-                org_name = (
-                    row.get("login")
-                    or row.get("organization")
-                    or row.get("org")
-                    or row.get("name")
-                )
-                if org_name:
-                    organizations.append(org_name.strip())
+            # First, try reading as CSV with headers
+            first_line = f.readline().strip()
+            f.seek(0)  # Reset to beginning
+            
+            # Check if first line looks like a header
+            if first_line.lower() in ['login', 'organization', 'org', 'name']:
+                # Has header, use DictReader
+                reader = csv.DictReader(f)
+                for row in reader:
+                    org_name = (
+                        row.get("login")
+                        or row.get("organization")
+                        or row.get("org")
+                        or row.get("name")
+                    )
+                    if org_name:
+                        organizations.append(org_name.strip())
+            else:
+                # No header, read as plain CSV (each line is an org name)
+                reader = csv.reader(f)
+                for row in reader:
+                    if row and row[0].strip():
+                        organizations.append(row[0].strip())
 
         total_orgs = len(organizations)
         print(f"Found {total_orgs} organizations to process")

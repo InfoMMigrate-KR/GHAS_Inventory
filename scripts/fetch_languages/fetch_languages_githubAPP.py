@@ -284,11 +284,9 @@ class GitHubScanner:
 
         possible_paths.extend(
             [
-                os.path.join(root_dir, "organizations.csv"),
                 os.path.join(script_dir, "organizations.csv"),
+                os.path.join(root_dir, "scripts", "output", "organizations.csv"),
                 os.path.join(script_dir, "..", "output", "organizations.csv"),
-                os.path.join(root_dir, "output", "organizations.csv"),
-                os.path.join(script_dir, "output", "organizations.csv"),
             ]
         )
 
@@ -326,18 +324,24 @@ class GitHubScanner:
 
                     if result.returncode == 0:
                         logging.info("Successfully executed fetch_orgs.py")
-                        # Check again for the CSV file in the expected location
-                        output_csv = os.path.join(
-                            script_dir, "..", "output", "organizations.csv"
-                        )
-                        if os.path.exists(output_csv):
-                            csv_file = output_csv
-                            logging.info(
-                                f"Organizations CSV file created at: {csv_file}"
-                            )
+                        # Check again for the CSV file in multiple expected locations
+                        potential_outputs = [
+                            os.path.join(root_dir, "scripts", "output", "organizations.csv"),
+                            os.path.join(script_dir, "..", "output", "organizations.csv"),
+                            os.path.join(root_dir, "output", "organizations.csv"),
+                        ]
+                        
+                        for output_csv in potential_outputs:
+                            if os.path.exists(output_csv):
+                                csv_file = output_csv
+                                logging.info(
+                                    f"Organizations CSV file created at: {csv_file}"
+                                )
+                                break
                         else:
                             logging.error(
-                                "fetch_orgs.py completed but organizations.csv not found at expected location"
+                                f"fetch_orgs.py completed but organizations.csv not found. Checked locations:\n" +
+                                "\n".join(f"  - {p}" for p in potential_outputs)
                             )
                     else:
                         logging.error(
@@ -350,8 +354,12 @@ class GitHubScanner:
 
             if not csv_file:
                 logging.error(
-                    "Please create an organizations.csv file with a 'login' column containing org names, "
-                    "or ensure fetch_orgs.py is available and working properly."
+                    "Could not find or generate organizations.csv file.\n"
+                    "Please either:\n"
+                    "1. Create an organizations.csv file (one org name per line) in one of these locations:\n" +
+                    "\n".join(f"   - {p}" for p in possible_paths) + "\n"
+                    "2. OR ensure the GitHub App is installed in at least one organization in your enterprise.\n"
+                    "   The script will auto-detect available installations."
                 )
                 return []
 
@@ -360,17 +368,29 @@ class GitHubScanner:
         organizations = []
         try:
             with open(csv_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    # Try different possible column names
-                    org_name = (
-                        row.get("login")
-                        or row.get("organization")
-                        or row.get("org")
-                        or row.get("name")
-                    )
-                    if org_name:
-                        organizations.append(org_name.strip())
+                # First, try reading as CSV with headers
+                first_line = f.readline().strip()
+                f.seek(0)  # Reset to beginning
+                
+                # Check if first line looks like a header
+                if first_line.lower() in ['login', 'organization', 'org', 'name']:
+                    # Has header, use DictReader
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        org_name = (
+                            row.get("login")
+                            or row.get("organization")
+                            or row.get("org")
+                            or row.get("name")
+                        )
+                        if org_name:
+                            organizations.append(org_name.strip())
+                else:
+                    # No header, read as plain CSV (each line is an org name)
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if row and row[0].strip():
+                            organizations.append(row[0].strip())
 
             logging.info(f"Loaded {len(organizations)} organizations from CSV")
             return organizations
