@@ -44,38 +44,13 @@ class EnterpriseFetcher:
         # Initialize GitHub App Authentication
         self.github_app = GitHubAppAuth()
         self.authenticated_orgs = set()
-        # Predefined list of known organizations to try for authentication
-        self.known_orgs = [
-            "im-naga-ghas",
-            "InfoMCopilot-KR",
-            "InfoMVyasVDemo",
-            "InfoMGHAS-KR",
-            "im-sandbox-kalpanarc",
-        ]
 
         print(f"[*] Initialized GitHub App authentication for Enterprise: {self.slug}")
 
-    def _ensure_authentication(self, org_login=None):
+    def _ensure_authentication(self, org_login):
         """
-        Ensure we have a valid authentication session.
-        For enterprise queries, we'll try known organizations for authentication.
+        Ensure we have a valid authentication session for the given organization.
         """
-        if not org_login:
-            # Try known organizations until one works
-            for known_org in self.known_orgs:
-                if known_org in self.authenticated_orgs:
-                    return self.github_app.get_authenticated_session()
-
-                try:
-                    success = self.github_app.authenticate_for_organization(known_org)
-                    if success:
-                        self.authenticated_orgs.add(known_org)
-                        return self.github_app.get_authenticated_session()
-                except Exception:
-                    continue
-
-            raise ValueError("Could not authenticate with any known organization")
-
         if org_login not in self.authenticated_orgs:
             success = self.github_app.authenticate_for_organization(org_login)
             if not success:
@@ -100,8 +75,8 @@ class EnterpriseFetcher:
 
         while attempts < max_retries:
             try:
-                # Ensure we have authentication (use default org for enterprise queries)
-                session = self._ensure_authentication()
+                # Get authenticated session
+                session = self.github_app.get_authenticated_session()
 
                 response = session.post(
                     self.api_url,
@@ -154,12 +129,88 @@ class EnterpriseFetcher:
 
         raise Exception("Max retries exceeded. Authentication or API issues.")
 
-    def fetch_all_organizations(self):
+    def get_first_accessible_org(self):
+        """
+        Get the first organization where the GitHub App is installed.
+        This can be used to authenticate for enterprise queries.
+        
+        Returns:
+            str: Organization login name, or None if none found
+        """
+        jwt_token = self.github_app._generate_jwt()
+        headers = {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+
+        try:
+            # List all installations for this GitHub App
+            response = requests.get(
+                f"{self.github_app.base_url}/app/installations",
+                headers=headers,
+                verify=self.github_app.verify_ssl,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                installations = response.json()
+                
+                for installation in installations:
+                    account = installation.get("account", {})
+                    account_login = account.get("login")
+                    
+                    # Prefer Organization accounts, but accept User accounts too
+                    if account_login:
+                        print(f"[*] Using GitHub App installation: {account_login}")
+                        return account_login
+                
+                print("[!] No valid GitHub App installations found with login names")
+                return None
+            else:
+                print(f"[!] Failed to list installations: HTTP {response.status_code}")
+                print(f"[!] Response: {response.text}")
+                return None
+
+        except Exception as e:
+            print(f"[!] Error getting installations: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def fetch_all_organizations(self, initial_org: str = None):
+        """
+        Fetch all organizations from the enterprise.
+        
+        Args:
+            initial_org: An organization to authenticate with. If not provided,
+                        will try to auto-detect from GitHub App installations.
+        """
         all_orgs = []
         has_next_page = True
         cursor = None
 
         print("[*] Starting fetch...")
+        
+        # Need to authenticate with at least one org to query enterprise
+        auth_org = initial_org or os.getenv("GH_INITIAL_ORG")
+        
+        # If no org specified, try to auto-detect from GitHub App installations
+        if not auth_org:
+            print("[*] No initial organization specified, auto-detecting from GitHub App installations...")
+            auth_org = self.get_first_accessible_org()
+        
+        if not auth_org:
+            print("[!] Could not find an organization to authenticate with.")
+            print("[!] Please either:")
+            print("    1. Set GH_INITIAL_ORG in your .env file, OR")
+            print("    2. Ensure the GitHub App is installed in at least one organization")
+            return []
+        
+        print(f"[*] Authenticating with organization: {auth_org}")
+        if not self.github_app.authenticate_for_organization(auth_org):
+            print(f"[X] Failed to authenticate with organization: {auth_org}")
+            print("[!] Make sure the GitHub App is installed in this organization.")
+            return []
 
         while has_next_page:
             variables = {"slug": self.slug, "cursor": cursor}
@@ -196,24 +247,18 @@ class EnterpriseFetcher:
         filename = f"organizations.csv"
         filepath = os.path.join(output_dir, filename)
 
-        # Define CSV headers
-        headers = ["login"]
-
         # Write to CSV
         with open(filepath, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=headers)
-            writer.writeheader()
+            writer = csv.writer(csvfile)
 
             for org in org_list:
                 # Skip None entries
                 if org is None:
                     continue
 
-                # Handle potential None values
-                row = {
-                    "login": org.get("login", "") if org else "",
-                }
-                writer.writerow(row)
+                # Write organization login directly
+                login = org.get("login", "") if org else ""
+                writer.writerow([login])
 
         print(f"[*] Organizations saved to: {filepath}")
         return filepath
@@ -237,6 +282,9 @@ if __name__ == "__main__":
             print("- GH_ENTERPRISE_SLUG: Your GitHub enterprise slug")
             print("- GH_APP_ID: Your GitHub App ID")
             print("- GH_PRIVATE_KEY: Path to your GitHub App private key file")
+            print("\nOptional:")
+            print("- GH_INITIAL_ORG: An organization where the GitHub App is installed")
+            print("  (if not set, will auto-detect from GitHub App installations)")
             exit(1)
 
         fetcher = EnterpriseFetcher()

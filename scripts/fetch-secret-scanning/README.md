@@ -46,6 +46,7 @@ GITHUB_TOKEN=your_personal_access_token_with_enterprise_read
 ALERT_STATE=all                    # Options: open, resolved, all (default: all)
 OUTPUT_FILENAME=secret_scanning_report  # Default output filename
 OUTPUT_FORMAT=csv                  # Options: csv, xlsx, both (default: csv)
+SECRET_TYPES=                      # Custom pattern names (see "Generic Patterns" section below)
 
 # Optional: SSL Configuration (for corporate environments)
 VERIFY_SSL=true                    # Set to false if using self-signed certificates
@@ -244,13 +245,108 @@ The GitHub App version differs from the PAT-based version in:
 
 For large enterprises (100+ organizations), expect execution times of 5-30 minutes depending on alert volumes.
 
-## Security Notes
+## Security Best Practices
 
 1. Keep your GitHub App private key secure
 2. Use appropriate file permissions for the private key (600)
 3. Store credentials in `.env` file, never commit them
 4. Regularly rotate your tokens and keys
 5. Use the minimum required permissions for the GitHub App
+
+## ⚠️ IMPORTANT: Generic vs Default Secret Patterns
+
+### The Problem
+
+GitHub's Secret Scanning API has a **critical limitation**:
+
+- **By default**: The API returns **ONLY default patterns** (GitHub's built-in patterns like AWS keys, GitHub tokens, etc.)
+- **Generic/Custom patterns**: Are **NOT returned** unless you explicitly specify their names in the `SECRET_TYPES` parameter
+
+**This means:**
+- If you see alerts in the GitHub UI with the filter `is:open results:generic`
+- But the script returns **0 results**
+- ✅ **You need to configure custom pattern names in `SECRET_TYPES`**
+
+### The Solution
+
+#### Step 1: Find Your Custom Pattern Names
+
+**Option A: Check Enterprise/Organization Settings**
+1. Go to GitHub Enterprise Settings (or Organization Settings)
+2. Navigate to: Security > Code security and analysis > Secret scanning
+3. Click on "Custom patterns"
+4. Note the pattern names/slugs (e.g., `password`, `internal_api_key`, etc.)
+
+**Option B: Check an Individual Alert**
+1. Open any generic alert in the GitHub UI
+2. Look at the alert details
+3. The pattern name is shown in the alert type
+
+**Option C: Use the Discovery Script**
+```bash
+python scripts/fetch-secret-scanning/discover_custom_patterns.py
+```
+(Note: This script will guide you on finding the names, as the API doesn't provide a discovery endpoint)
+
+#### Step 2: Configure SECRET_TYPES
+
+Add your custom pattern names to the `.env` file:
+
+```env
+# To fetch ONLY default patterns (omit or leave empty)
+SECRET_TYPES=
+
+# To fetch ONLY custom patterns
+SECRET_TYPES=password,internal_api_key,custom_token
+
+# To fetch both default AND custom (list all custom pattern names)
+SECRET_TYPES=password,internal_api_key,custom_token
+```
+
+**Note**: Setting `SECRET_TYPES=all` does **NOT** magically fetch all patterns - it still only gets default patterns!
+
+#### Step 3: Run the Script
+
+```bash
+python scripts/fetch-secret-scanning/fetch_secret_scanning_alerts.py
+```
+
+### Output with Pattern Categories
+
+The script now automatically classifies each alert:
+- Adds a **`Pattern_Category`** column with values: `default` or `generic`
+- Summary statistics show counts for each category
+
+Example output:
+```
+Data Processing Complete:
+  - Secret Scanning: 150 alerts
+    • Default Patterns: 120
+    • Generic Patterns: 30
+```
+
+## Troubleshooting
+
+### "Fetched 0 alerts" but I see alerts in the UI
+
+**Cause**: You're viewing generic/custom pattern alerts in the UI (filtered by `results:generic`), but the API only returns default patterns by default.
+
+**Solution**: 
+1. Find your custom pattern names from Enterprise/Org settings
+2. Add them to `SECRET_TYPES` in `.env` file
+3. Example: `SECRET_TYPES=password,api_key,internal_token`
+
+### How do I get ALL alerts (both default and custom)?
+
+1. Find all your custom pattern names
+2. List them in `SECRET_TYPES`
+3. The script will then return:
+   - All default pattern alerts (always included)
+   - All custom pattern alerts (because you specified them)
+
+### The UI shows "results:generic" filter - what does that mean?
+
+The `results:generic` filter in the GitHub UI is **NOT an API parameter**. It's a UI-only filter that shows custom patterns. To get these via API, you must specify the pattern names explicitly.
 
 ## Support
 
@@ -259,3 +355,4 @@ For issues or questions:
 2. Verify your GitHub App configuration
 3. Ensure all environment variables are set correctly
 4. Check that the app is installed in target organizations
+5. **If getting 0 results**: Verify `SECRET_TYPES` is configured with your custom pattern names
