@@ -67,11 +67,6 @@ RATE_LIMIT_BUFFER = int(
     os.getenv("RATE_LIMIT_BUFFER") or "100"
 )  # Remaining requests before slowing down
 
-# Feature flags for enrichment
-ENABLE_REPO_ADMIN_ENRICHMENT = (
-    os.getenv("ENABLE_REPO_ADMIN_ENRICHMENT", "false").lower() == "true"
-)
-
 
 @dataclass
 class PerformanceMetrics:
@@ -561,12 +556,9 @@ def load_alert_config() -> Dict[str, Any]:
     if config["test_mode"]:
         logging.info(f"  - Test Org Limit: {config['test_org_limit']}")
 
-    # Log enrichment settings
-    commit_enrichment_enabled = (
-        os.getenv("ENABLE_COMMIT_ENRICHMENT", "true").lower() == "true"
-    )
-    logging.info(f"  - Commit Enrichment: {commit_enrichment_enabled}")
-    logging.info(f"  - Repo Admin Enrichment: {ENABLE_REPO_ADMIN_ENRICHMENT}")
+    # Enrichment is always enabled
+    logging.info(f"  - Commit Enrichment: Enabled")
+    logging.info(f"  - Repo Admin Enrichment: Enabled")
 
     return config
 
@@ -1425,11 +1417,9 @@ def extract_and_enrich_data(
     # Convert generator to list for processing
     secret_scanning_data = list(extract_secret_scanning_data(all_alerts))
 
-    # Enrich with commit author information if enabled
-    if secret_scanning_data and os.getenv(
-        "ENABLE_COMMIT_ENRICHMENT", "false"
-    ).lower() in ["true", "1", "yes"]:
-        logging.info("Commit enrichment is enabled - fetching commit details...")
+    # Enrich with commit author information (always enabled)
+    if secret_scanning_data:
+        logging.info("Fetching commit details...")
 
         # Group alerts by organization for efficient session management
         alerts_by_org = defaultdict(list)
@@ -1462,10 +1452,6 @@ def extract_and_enrich_data(
                     logging.error(f"Error in commit enrichment: {e}")
 
         logging.info("Commit enrichment completed")
-    elif secret_scanning_data:
-        logging.info(
-            "Commit enrichment is disabled. Set ENABLE_COMMIT_ENRICHMENT=true to enable."
-        )
 
     if metrics:
         metrics.processing_times["data_extraction_and_enrichment"] = (
@@ -1513,8 +1499,8 @@ def enrich_organization_alerts(
                         )
                         secret_scanning_data[idx]["Commit_SHA"] = commit_info.get("sha")
 
-                    # Enrich with repository admin information if enabled
-                    if ENABLE_REPO_ADMIN_ENRICHMENT and repo_full_name:
+                    # Enrich with repository admin information (always enabled)
+                    if repo_full_name:
                         # Check cache first
                         if repo_full_name not in repo_admin_cache:
                             repo_admins = fetch_repository_admins(
@@ -1527,9 +1513,6 @@ def enrich_organization_alerts(
                         secret_scanning_data[idx]["Repo_Admin"] = repo_admin_cache[
                             repo_full_name
                         ]
-                    elif not ENABLE_REPO_ADMIN_ENRICHMENT:
-                        # Add empty column for consistency
-                        secret_scanning_data[idx]["Repo_Admin"] = ""
 
                 except Exception as e:
                     logging.warning(f"Failed to enrich alert {idx}: {e}")
@@ -1540,17 +1523,15 @@ def enrich_organization_alerts(
             logging.warning(
                 f"Could not authenticate for {org_name} - skipping enrichment"
             )
-            # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
-            if ENABLE_REPO_ADMIN_ENRICHMENT:
-                for idx, _ in org_alerts:
-                    secret_scanning_data[idx]["Repo_Admin"] = ""
+            # Add empty Repo_Admin column for this org's alerts
+            for idx, _ in org_alerts:
+                secret_scanning_data[idx]["Repo_Admin"] = ""
     except Exception as e:
         logging.error(f"Error enriching alerts for {org_name}: {e}")
-        # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
-        if ENABLE_REPO_ADMIN_ENRICHMENT:
-            for idx, _ in org_alerts:
-                if "Repo_Admin" not in secret_scanning_data[idx]:
-                    secret_scanning_data[idx]["Repo_Admin"] = ""
+        # Add empty Repo_Admin column for this org's alerts
+        for idx, _ in org_alerts:
+            if "Repo_Admin" not in secret_scanning_data[idx]:
+                secret_scanning_data[idx]["Repo_Admin"] = ""
 
 
 def export_results(
