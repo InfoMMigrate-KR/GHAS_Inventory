@@ -1053,10 +1053,10 @@ def fetch_all_pages(
                     metrics.memory_peak_mb = max(metrics.memory_peak_mb, memory_mb)
 
         except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code if e.response else "unknown"
+            status_code = e.response.status_code if e.response else None
             error_msg = e.response.text if e.response else str(e)
 
-            logging.error(f"HTTP Error {status_code} fetching {url}: {error_msg[:200]}")
+            logging.error(f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}")
 
             # Don't retry on client errors (4xx) except rate limiting
             if status_code == 403:
@@ -1090,7 +1090,7 @@ def fetch_all_pages(
                     time.sleep(wait_time)
                     continue  # Try again
 
-            if 400 <= status_code < 500:
+            if status_code and 400 <= status_code < 500:
                 logging.error(f"Client error {status_code} - stopping pagination for {endpoint_url}")
                 break
 
