@@ -1,43 +1,74 @@
 # Alert Assignment Script
 
-This script processes secret scanning alerts and provides functionality to assign them to the committer who introduced the secret.
+This script processes secret scanning alerts from CSV files and **automatically assigns them via GitHub API** to the committer who introduced the secret.
 
 ## Features
 
-- **Committer Identification**: Identifies the GitHub handle of the user who committed the code containing the secret
+- **Automatic Assignment**: Assigns secret scanning alerts to committers via GitHub's Secret Scanning API
+- **Committer Identification**: Uses the `Commit_Author` field to identify who introduced the secret
 - **Assignment Summary**: Provides detailed statistics about alert distribution across committers
-- **Flexible Output**: Supports both console display and CSV export
-- **Dry-run Mode**: Allows testing without making actual API calls
+- **Flexible Output**: Supports both console display and CSV export to `scripts/output/assign_alerts/`
+- **Dry-run Mode**: Preview assignments without making actual API calls
+- **Error Handling**: Robust retry logic with exponential backoff for API failures
+- **Rate Limiting**: Built-in delays to respect GitHub API rate limits
 
 ## Prerequisites
 
-1. **Commit Enrichment Enabled**: Ensure that the `fetch_secret_scanning_alerts.py` script is configured to collect committer information:
+1. **GitHub Token**: Set either `GH_PATS` or `GITHUB_TOKEN` environment variable with a token that has `repo` and `security_events` scopes
+
+2. **Commit Enrichment Enabled**: Ensure that the `fetch_secret_scanning_alerts.py` script is configured to collect committer information:
    ```bash
    export ENABLE_COMMIT_ENRICHMENT=true
    ```
 
-2. **Updated CSV Data**: Run the fetch script to generate CSV data with committer information:
+3. **Updated CSV Data**: Run the fetch script to generate CSV data with committer information:
    ```bash
    python ../fetch_secret_scanning_alerts.py
    ```
 
 ## Usage
 
-### Basic Usage
+### Basic Usage (Dry-run Mode)
+Preview assignments without making API calls:
 ```bash
-python assign_alerts.py --csv-file ../output/secret_scanning_secret_scanning_report.csv --dry-run
+python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --dry-run
+```
+
+### Assign Alerts via GitHub API
+Actually assign alerts to committers:
+```bash
+python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv
 ```
 
 ### With Custom Output File
 ```bash
-python assign_alerts.py --csv-file ../output/secret_scanning_secret_scanning_report.csv --output my_assignments.csv
+python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --output custom_report.csv
 ```
 
 ## Command Line Arguments
 
 - `--csv-file`: Path to the secret scanning CSV file (required)
-- `--dry-run`: Show assignments without making API calls
-- `--output`: Custom output file for assignment report (CSV format)
+- `--dry-run`: Show assignments without making API calls (optional)
+- `--output`: Custom output file path for assignment report (optional, default: `scripts/output/assign_alerts/alert_assignments_<timestamp>.csv`)
+
+## Environment Variables
+
+The script requires one of the following environment variables:
+
+- `GH_PATS`: Comma-separated list of GitHub Personal Access Tokens (uses first token)
+- `GITHUB_TOKEN`: Single GitHub Personal Access Token
+
+Token requirements:
+- `repo` scope (for repository access)
+- `security_events` scope (for secret scanning alert management)
+
+## Output
+
+The script generates:
+
+1. **Console Summary**: Shows assignment statistics and sample alerts for each committer
+2. **CSV Report**: Detailed assignment data saved to `scripts/output/assign_alerts/alert_assignments_<timestamp>.csv`
+3. **API Results**: Success/failure count for actual assignments (when not in dry-run mode)
 
 ## Output
 
@@ -68,61 +99,72 @@ Committer: john-doe
   Sample open alerts:
     - #123 in repo1 (AWS Access Key)
     - #124 in repo2 (Google API Key)
+
+2025-12-21 20:11:34,880 - INFO - Successfully assigned alert #123 in org/repo1 to @john-doe
+2025-12-21 20:11:35,120 - INFO - Successfully assigned alert #124 in org/repo2 to @john-doe
+2025-12-21 20:11:35,350 - INFO - Assignment complete: 15 succeeded, 0 failed
+
+================================================================================
+NEXT STEPS:
+================================================================================
+✓ Successfully assigned 15 alert(s) via GitHub API
+Review the generated CSV file for complete assignment details.
 ```
 
 ### CSV Report Columns
 
 | Column | Description |
 |--------|-------------|
-| `Committer_Id` | GitHub handle of the committer |
+| `Assignee` | GitHub username of the committer (assigned user) |
 | `Alert_Number` | Secret scanning alert number |
 | `Repository_Name` | Repository where secret was found |
 | `Secret_Type` | Type of secret detected |
 | `State` | Alert state (open/resolved) |
 | `URL` | Direct link to the alert |
-| `Total_Alerts_For_Committer` | Total alerts for this committer |
-| `Open_Alerts_For_Committer` | Number of open alerts for this committer |
+| `Total_Alerts_For_Assignee` | Total alerts for this assignee |
+| `Open_Alerts_For_Assignee` | Number of open alerts for this assignee |
 
-## Integration with GitHub API
+## How It Works
 
-This script provides the foundation for automated alert assignment. To implement actual GitHub API assignment, you would extend the script with:
+### GitHub API Integration
 
-1. **GitHub API Client**: Use PyGithub or requests to make API calls
-2. **Assignment Logic**: Implement the actual alert assignment via GitHub API
-3. **Error Handling**: Handle API rate limits and permissions
-4. **Batch Processing**: Process assignments in batches for efficiency
+The script uses the [GitHub Secret Scanning API](https://docs.github.com/en/rest/secret-scanning/secret-scanning#update-a-secret-scanning-alert) to assign alerts:
 
-### Example API Integration (Pseudocode)
-```python
-def assign_alert_to_user(repo_full_name: str, alert_number: int, assignee: str, github_token: str):
-    """Assign a secret scanning alert to a user via GitHub API"""
-    url = f"https://api.github.com/repos/{repo_full_name}/secret-scanning/alerts/{alert_number}"
-    headers = {
-        "Authorization": f"Bearer {github_token}",
-        "Accept": "application/vnd.github+json"
-    }
-    
-    # Note: GitHub API for assigning secret scanning alerts may vary
-    # Check the latest GitHub API documentation for the correct endpoint
-    payload = {"assignees": [assignee]}
-    
-    response = requests.patch(url, json=payload, headers=headers)
-    return response.status_code == 200
+**API Endpoint:**
+```
+PATCH /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}
 ```
 
-## Error Handling
+**Payload:**
+```json
+{
+  "assignee": "username"
+}
+```
 
-The script handles common scenarios:
+### Assignment Process
 
-- **Missing committer data**: Alerts without `Committer_Id` are filtered out
-- **CSV file errors**: Clear error messages for file access issues
-- **Empty results**: Guidance on enabling commit enrichment if no data found
+1. **Load CSV Data**: Reads secret scanning alerts from the provided CSV file
+2. **Filter Alerts**: Filters alerts that have a valid `Commit_Author` value
+3. **Generate Summary**: Creates assignment statistics grouped by committer
+4. **Assign via API** (if not dry-run):
+   - Authenticates with GitHub using provided token
+   - Iterates through each alert
+   - Makes PATCH request to assign alert to the committer
+   - Implements retry logic with exponential backoff
+   - Adds 0.1s delay between requests for rate limiting
+5. **Save Report**: Exports detailed assignment data to CSV
+6. **Display Results**: Shows success/failure statistics
 
-## Performance Considerations
+### Error Handling
 
-- **API Rate Limits**: The parent fetch script respects GitHub API rate limits
-- **Commit Enrichment**: Can be disabled via `ENABLE_COMMIT_ENRICHMENT=false` to save API quota
-- **Batch Processing**: Consider processing assignments in batches for large datasets
+The script handles various scenarios:
+
+- **404 Not Found**: Alert doesn't exist or was deleted
+- **422 Unprocessable Entity**: Invalid assignee (user doesn't exist or lacks repository access)
+- **403 Forbidden**: Token lacks required permissions
+- **Network Errors**: Automatic retry with exponential backoff (up to 3 attempts)
+- **Missing Data**: Alerts without `Commit_Author` are filtered out with clear warnings
 
 ## Troubleshooting
 
@@ -133,18 +175,62 @@ If the script shows no alerts with committer information:
 2. Re-run `fetch_secret_scanning_alerts.py` to collect the data
 3. Check that your GitHub PAT has sufficient permissions to access commit information
 
+### Assignment Failures
+
+**422 Error - Invalid Assignee:**
+- The GitHub username may not exist
+- The user may not have access to the repository
+- Verify the username in the `Commit_Author` column is correct
+
+**403 Error - Permission Denied:**
+- Your token needs `repo` and `security_events` scopes
+- Generate a new token with proper permissions at https://github.com/settings/tokens
+
+**404 Error - Alert Not Found:**
+- The alert may have been deleted
+- Verify the alert number and repository name are correct
+
 ### Rate Limiting
-If you encounter API rate limit errors:
+The script includes built-in rate limiting (0.1s delay between requests). If you still encounter rate limit errors:
 
-1. Use multiple GitHub PATs in the fetch script
-2. Add delays between API calls
-3. Process in smaller batches
-4. Consider disabling commit enrichment for very large datasets
+1. Use multiple GitHub PATs in the `GH_PATS` environment variable
+2. Increase the delay in the code (modify `time.sleep(0.1)` to a higher value)
+3. Process alerts in smaller batches
 
-## Future Enhancements
+## Performance Considerations
 
-- **Automatic Assignment**: Direct integration with GitHub API for automatic assignment
-- **Assignment Rules**: Configurable rules for assignment logic (e.g., assign to repo admin if committer unavailable)
-- **Notification System**: Email or Slack notifications for assigned users
-- **Progress Tracking**: Track assignment progress and follow-up actions
-- **Bulk Operations**: Support for bulk assignment operations via GitHub API
+- **API Rate Limits**: The script respects GitHub API rate limits with built-in delays
+- **Commit Enrichment**: Can be disabled via `ENABLE_COMMIT_ENRICHMENT=false` to save API quota
+- **Batch Processing**: Processes all alerts in sequence with retry logic
+- **Output Location**: Reports are saved to `scripts/output/assign_alerts/` directory
+
+## Example Workflow
+
+1. **Fetch Alerts with Commit Information:**
+   ```bash
+   cd scripts
+   export ENABLE_COMMIT_ENRICHMENT=true
+   python fetch_secret_scanning_alerts.py
+   ```
+
+2. **Preview Assignments (Dry-run):**
+   ```bash
+   cd scripts/assign_alerts
+   python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --dry-run
+   ```
+
+3. **Assign Alerts via API:**
+   ```bash
+   python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv
+   ```
+
+4. **Review Results:**
+   - Check console output for success/failure statistics
+   - Review the CSV report in `scripts/output/assign_alerts/`
+   - Verify assignments in GitHub UI
+
+## API Documentation
+
+For more details on the GitHub Secret Scanning API:
+- [Update a secret scanning alert](https://docs.github.com/en/rest/secret-scanning/secret-scanning#update-a-secret-scanning-alert)
+- [Secret Scanning API Parameters](https://docs.github.com/en/rest/secret-scanning/secret-scanning?apiVersion=2022-11-28#update-a-secret-scanning-alert--parameters)
