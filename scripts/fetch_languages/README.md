@@ -24,10 +24,11 @@ A Python tool for analyzing programming languages used across all repositories i
 ## Prerequisites
 
 - Python 3.9+
-- GitHub Personal Access Token(s) with appropriate permissions:
-  - `admin:org` - Read organization data
+- GitHub App with appropriate permissions installed on your Enterprise:
+  - `read:org` - Read organization data
   - `repo` - Read repository data (for private repos)
-  - `admin:enterprise` - Read enterprise data
+  - `read:enterprise` - Read enterprise data
+  - App must be installed on organizations within the enterprise
 
 ## Setup
 
@@ -44,6 +45,7 @@ Required packages:
 - `pandas>=2.0.0`
 - `openpyxl>=3.1.0`
 - `python-dotenv>=1.0.0`
+- `PyJWT>=2.8.0` (for GitHub App authentication)
 
 ### 2. Configure Environment Variables
 
@@ -59,23 +61,61 @@ Edit `.env` with your configuration:
 # Required: Your GitHub Enterprise slug
 GH_ENTERPRISE_SLUG=your-enterprise-slug
 
-# Required: GitHub Personal Access Token(s)
-# Single token:
-GITHUB_TOKEN=ghp_your_token_here
+# Required: GitHub App credentials
+GH_APP_ID=123456
+GH_PRIVATE_KEY=path/to/your/private-key.pem
 
-# Or multiple tokens (comma-separated) for better rate limit handling:
-GITHUB_TOKENS=ghp_token1,ghp_token2,ghp_token3
+# Optional: Default organization for authentication (recommended for enterprise queries)
+GITHUB_DEFAULT_ORG=your-default-org-name
 
 # Optional: Output format (default: excel)
 OUTPUT_FORMAT=excel  # Options: excel, csv
 ```
 
+**Note**: The GitHub App authentication replaces the previous Personal Access Token (PAT) method. This provides better security and more granular permissions.
+
 ## Usage
 
-### Basic Usage
+### Automated Workflow (Recommended)
 
-Run the script from the project root or scripts directory:
+The easiest way to run the complete analysis is using the automated workflow:
 
+#### Option 1: Python Workflow Script
+```bash
+python scripts/fetch_languages/run_language_analysis.py
+```
+
+#### Option 2: Windows Batch Script (Double-click or command line)
+```cmd
+run_language_analysis.bat
+```
+
+The automated workflow will:
+1. Validate prerequisites (tokens, environment variables)
+2. Fetch all organizations from your GitHub Enterprise
+3. Validate the organization data
+4. Run language analysis across all repositories
+5. Generate comprehensive reports and logs
+
+#### Workflow Features:
+- **Prerequisite Validation**: Checks .env file, tokens, and script availability
+- **CSV Validation**: Ensures organization data was fetched successfully
+- **Comprehensive Logging**: Detailed logs saved to `output/logs/workflow_execution_*.log`
+- **Error Recovery**: Clear error messages and guidance for troubleshooting
+- **Progress Tracking**: Real-time updates on workflow progress
+- **Output Summary**: Lists all generated files with sizes
+- **Cleanup**: Optional cleanup of old files (configurable)
+
+### Manual Usage
+
+You can also run the scripts individually:
+
+#### Step 1: Fetch Organizations
+```bash
+python scripts/fetch_languages/fetch_orgs.py
+```
+
+#### Step 2: Fetch Language Data
 ```bash
 python scripts/fetch_languages/fetch_languages.py
 ```
@@ -84,9 +124,12 @@ python scripts/fetch_languages/fetch_languages.py
 
 The script generates reports in `scripts/fetch_languages/output/` directory:
 
+#### Workflow Output Files:
+- `organizations.csv`: List of all GitHub Enterprise organizations
 - `languages_report_YYYYMMDD_HHMMSS.csv`: Progressive language data
 - `languages_errors_YYYYMMDD_HHMMSS.csv`: Progressive error log
 - `languages_summary_YYYYMMDD_HHMMSS.csv`: Language summary
+- `logs/workflow_execution_YYYYMMDD_HHMMSS.log`: Complete workflow log
 - `logs/language_scan_YYYYMMDD_HHMMSS.log`: Detailed execution log
 - `logs/timing_report_YYYYMMDD_HHMMSS.csv`: Per-org timing analytics
 

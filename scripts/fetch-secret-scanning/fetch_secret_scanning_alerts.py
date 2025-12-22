@@ -39,6 +39,11 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 TIMEOUT = 30  # seconds
 
+# Feature flags for enrichment
+ENABLE_REPO_ADMIN_ENRICHMENT = (
+    os.getenv("ENABLE_REPO_ADMIN_ENRICHMENT", "false").lower() == "true"
+)
+
 # --- Helper Functions ---
 
 
@@ -145,6 +150,138 @@ def extract_alert_data(
     return extracted_data
 
 
+def is_default_secret_type(secret_type: str) -> str:
+    """
+    Determine if a secret type is a default GitHub pattern or a generic/custom pattern.
+
+    Default patterns are GitHub's built-in secret detection patterns.
+    Generic patterns are user-defined custom patterns.
+
+    Args:
+        secret_type: The secret_type value from the API
+
+    Returns:
+        "default" or "generic"
+    """
+    # List of known GitHub default secret type prefixes/patterns
+    # These are the standard patterns GitHub provides out-of-the-box
+    default_patterns = [
+        # Common service tokens
+        "github_",
+        "aws_",
+        "azure_",
+        "google_",
+        "slack_",
+        "stripe_",
+        "twilio_",
+        "mailchimp_",
+        "sendgrid_",
+        "heroku_",
+        "digitalocean_",
+        "dropbox_",
+        "paypal_",
+        "square_",
+        "shopify_",
+        "alibaba_",
+        "npm_",
+        # Specific patterns
+        "adafruit_",
+        "adobe_",
+        "age_",
+        "airtable_",
+        "algolia_",
+        "ansible_",
+        "asana_",
+        "atlassian_",
+        "authress_",
+        "beamer_",
+        "bitbucket_",
+        "bittrex_",
+        "clojars_",
+        "codecov_",
+        "coinbase_",
+        "confluence_",
+        "contentful_",
+        "databricks_",
+        "datadog_",
+        "defined_",
+        "discord_",
+        "doppler_",
+        "droneci_",
+        "duffel_",
+        "dynatrace_",
+        "easypost_",
+        "etsy_",
+        "facebook_",
+        "fastly_",
+        "finicity_",
+        "flutterwave_",
+        "frameio_",
+        "freshbooks_",
+        "gcp_",
+        "gitlab_",
+        "gitter_",
+        "grafana_",
+        "hashicorp_",
+        "hubspot_",
+        "intercom_",
+        "ionic_",
+        "jfrog_",
+        "linear_",
+        "lob_",
+        "mailgun_",
+        "mapbox_",
+        "messagebird_",
+        "microsoft_",
+        "netlify_",
+        "new_relic_",
+        "notion_",
+        "nytimes_",
+        "okta_",
+        "openai_",
+        "planetscale_",
+        "postman_",
+        "pulumi_",
+        "readme_",
+        "rubygems_",
+        "samsara_",
+        "segment_",
+        "sendinblue_",
+        "sentry_",
+        "shippo_",
+        "shopify_",
+        "sidekiq_",
+        "supabase_",
+        "telegram_",
+        "travis_",
+        "twitch_",
+        "typeform_",
+        "vault_",
+        "vercel_",
+        "yandex_",
+        "zendesk_",
+        # Generic credential patterns
+        "private_key",
+        "rsa_private",
+        "ssh_private",
+        "pgp_private",
+        "pkcs8_private",
+    ]
+
+    if not secret_type:
+        return "unknown"
+
+    secret_type_lower = secret_type.lower()
+
+    # Check if it matches any default pattern
+    for pattern in default_patterns:
+        if secret_type_lower.startswith(pattern) or pattern in secret_type_lower:
+            return "default"
+
+    # If it doesn't match any known default pattern, it's likely generic/custom
+    return "generic"
+
+
 def parse_organization_name(org_name: str) -> Tuple[str, str]:
     """
     Parse organization name to extract Project_Code and Cost_Center.
@@ -206,6 +343,9 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
         ),
         "Secret_Type": ("secret_type_display_name",),
         "Secret_Type_ID": ("secret_type",),
+        "Pattern_Category": lambda alert: is_default_secret_type(
+            safe_get(alert, "secret_type")
+        ),
         "State": ("state",),
         "Created_At": ("created_at",),
         "Updated_At": ("updated_at",),
@@ -228,17 +368,12 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
         "Location_End_Column": ("first_location_detected", "end_column"),
         "Location_Blob_Sha": ("first_location_detected", "blob_sha"),
         "Location_Blob_URL": ("first_location_detected", "blob_url"),
-        "Location_Commit_Sha": ("first_location_detected", "commit_sha"),
-        "Location_Commit_URL": ("first_location_detected", "commit_url"),
-        # Repository admin information
-        "Repository_Admins": lambda alert: None,
-        "Repository_Admins_email_id": lambda alert: None,
-        # Committer information
-        "Committer_Id": lambda alert: None,
-        "Author_Id": lambda alert: None,
-        "Commit_Message": lambda alert: None,
-        "Author_Email": lambda alert: None,
-        "Committer_Email": lambda alert: None,
+        # Commit author information
+        "Commit_Author": lambda alert: None,
+        "Commit_Committer": lambda alert: None,
+        "Commit_SHA": lambda alert: None,
+        # Repository admin information (populated during enrichment if enabled)
+        "Repo_Admin": lambda alert: "",
     }
     return extract_alert_data(alerts, field_mapping, "Secret Scanning")
 
@@ -296,6 +431,15 @@ def create_summary_data(
             {
                 "Alert_Type": "Secret Scanning",
                 "Total_Count": len(secret_scanning_data),
+                "Default_Patterns": count_by_field(
+                    secret_scanning_data, "Pattern_Category", "default"
+                ),
+                "Generic_Patterns": count_by_field(
+                    secret_scanning_data, "Pattern_Category", "generic"
+                ),
+                "Unknown_Category": count_by_field(
+                    secret_scanning_data, "Pattern_Category", "unknown"
+                ),
                 "Active_Secrets": count_by_field(
                     secret_scanning_data, "Validity", "active"
                 ),
@@ -356,6 +500,11 @@ def load_alert_config() -> Dict[str, Any]:
                                  Set to 'false' to disable and save API rate limits
         TEST_MODE: Enable testing mode with limited results (default: false)
         TEST_LIMIT: Number of alerts to fetch in testing mode (default: 20)
+        SECRET_TYPES: Comma-separated list of secret types to include (default: all)
+                     By default, GitHub API returns only default patterns.
+                     To include generic/custom patterns, specify their names explicitly.
+                     Example: 'my_custom_pattern,another_pattern'
+                     Note: Results will include a 'Pattern_Category' column (default/generic)
 
     Returns:
         dict: Configuration dictionary
@@ -371,6 +520,7 @@ def load_alert_config() -> Dict[str, Any]:
         == "true",
         "test_mode": os.getenv("TEST_MODE", "false").lower() == "true",
         "test_limit": int(os.getenv("TEST_LIMIT", "20")),
+        "secret_types": os.getenv("SECRET_TYPES", "all").strip(),
     }
 
     # Validate state (Secret scanning supports: open, resolved)
@@ -400,6 +550,14 @@ def load_alert_config() -> Dict[str, Any]:
         logging.info(f"  - Test Mode: ENABLED (limit: {config['test_limit']} alerts)")
     else:
         logging.info(f"  - Test Mode: disabled")
+    logging.info(f"  - Secret Types: {config['secret_types']}")
+
+    # Log enrichment settings
+    commit_enrichment_enabled = (
+        os.getenv("ENABLE_COMMIT_ENRICHMENT", "false").lower() == "true"
+    )
+    logging.info(f"  - Commit Enrichment: {commit_enrichment_enabled}")
+    logging.info(f"  - Repo Admin Enrichment: {ENABLE_REPO_ADMIN_ENRICHMENT}")
 
     return config
 
@@ -449,24 +607,6 @@ def load_config() -> Tuple[str, List[str]]:
     logging.info(f"Found {len(valid_pats)} valid PATs to use in round-robin.")
 
     return enterprise_slug, valid_pats
-
-
-def load_all_orgs_write_pat() -> Optional[str]:
-    """
-    Load the GH_ALL_ORGS_WRITE_PAT from environment variables.
-    This PAT is used specifically for fetching repository admins.
-
-    Returns:
-        str: The GH_ALL_ORGS_WRITE_PAT token, or None if not set
-    """
-    pat = os.getenv("GH_ALL_ORGS_WRITE_PAT")
-    if pat:
-        logging.info("Loaded GH_ALL_ORGS_WRITE_PAT for admin retrieval")
-    else:
-        logging.warning(
-            "GH_ALL_ORGS_WRITE_PAT not set, will use standard PAT for admin retrieval"
-        )
-    return pat
 
 
 @retry_on_failure()
@@ -618,41 +758,29 @@ def fetch_user_email(
 
 
 @retry_on_failure()
-def fetch_repo_admins(
-    repo_full_name: str, pat_cycler: itertools.cycle, admin_pat: Optional[str] = None
-) -> str:
+def fetch_repository_admins(
+    repo_full_name: str, pat_cycler: itertools.cycle
+) -> List[str]:
     """
-    Fetch repository administrators.
+    Fetch repository administrators (users with admin permissions).
 
     Args:
         repo_full_name: Full repository name (owner/repo)
         pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
 
     Returns:
-        Comma-separated string of admin usernames
+        List of usernames with admin permissions
     """
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Use admin_pat if provided, otherwise use pat_cycler
-    if admin_pat:
-        token = admin_pat
-        logging.debug(
-            f"Using GH_ALL_ORGS_WRITE_PAT for admin retrieval: {repo_full_name}"
-        )
-    else:
-        token = next(pat_cycler)
-        logging.debug(
-            f"Using standard PAT (cycled) for admin retrieval: {repo_full_name}"
-        )
-
+    token = next(pat_cycler)
     headers["Authorization"] = f"Bearer {token}"
 
     try:
-        # Fetch collaborators with admin permissions
+        # Fetch collaborators with admin permission
         url = f"https://api.github.com/repos/{repo_full_name}/collaborators"
         params = {"permission": "admin", "per_page": 100}
 
@@ -660,36 +788,31 @@ def fetch_repo_admins(
         response.raise_for_status()
 
         collaborators = response.json()
-        admin_logins = []
-        admin_emails = []
+        admin_users = [
+            collaborator.get("login")
+            for collaborator in collaborators
+            if collaborator.get("login")
+        ]
 
-        for collab in collaborators:
-            if collab.get("login"):
-                admin_logins.append(collab.get("login"))
-                # Fetch detailed user info to get email (pass repo for commit history fallback)
-                email = fetch_user_email(
-                    collab.get("login"), pat_cycler, repo_full_name
-                )
-                admin_emails.append(email if email else "N/A")
-
-        return {
-            "logins": ", ".join(admin_logins) if admin_logins else None,
-            "emails": ", ".join(admin_emails) if admin_emails else None,
-        }
+        logging.debug(f"Found {len(admin_users)} admin users for {repo_full_name}")
+        return admin_users
 
     except Exception as e:
-        logging.warning(f"Failed to fetch admins for {repo_full_name}: {e}")
-        return {"logins": None, "emails": None}
+        logging.debug(f"Failed to fetch repository admins for {repo_full_name}: {e}")
+        return []
 
 
 def enrich_secret_data_with_commit_details(
     secret_data: List[Dict], pat_cycler: itertools.cycle
 ) -> List[Dict]:
     """
-    Enrich secret scanning data with commit author information.
+    Enrich secret scanning data with commit author information and optional repository admin information.
     This function is separate and not called by default to save API rate limits.
     """
     logging.info("Enriching secret scanning data with commit information...")
+
+    # Cache repository admins to avoid repeated API calls for the same repo
+    repo_admin_cache = {}
 
     enriched_data = []
 
@@ -741,6 +864,20 @@ def enrich_secret_data_with_commit_details(
                 alert["Author_Email"] = None
                 alert["Committer_Email"] = None
 
+            # Enrich with repository admin information if enabled
+            if ENABLE_REPO_ADMIN_ENRICHMENT and repo_full_name:
+                # Check cache first
+                if repo_full_name not in repo_admin_cache:
+                    repo_admins = fetch_repository_admins(repo_full_name, pat_cycler)
+                    repo_admin_cache[repo_full_name] = (
+                        ", ".join(repo_admins) if repo_admins else ""
+                    )
+
+                alert["Repo_Admin"] = repo_admin_cache[repo_full_name]
+            else:
+                # Ensure column exists even if feature is disabled
+                alert["Repo_Admin"] = ""
+
             enriched_data.append(alert)
 
             # Log progress every 50 items
@@ -749,88 +886,16 @@ def enrich_secret_data_with_commit_details(
 
         except Exception as e:
             logging.error(f"Error enriching alert {idx} with commit info: {e}")
+            # Ensure Repo_Admin column exists even if enrichment fails
+            if "Repo_Admin" not in alert:
+                alert["Repo_Admin"] = ""
             enriched_data.append(alert)  # Add original alert even if enrichment fails
 
     logging.info(f"Completed commit enrichment for {len(enriched_data)} alerts")
-    return enriched_data
-
-
-def enrich_secret_data_with_commit_info(
-    secret_data: List[Dict],
-    pat_cycler: itertools.cycle,
-    admin_pat: Optional[str] = None,
-) -> List[Dict]:
-    """
-    Enrich secret scanning data with repository admin information only.
-
-    Args:
-        secret_data: List of secret scanning alerts
-        pat_cycler: PAT cycler for authentication
-        admin_pat: Optional dedicated PAT for admin retrieval (GH_ALL_ORGS_WRITE_PAT)
-    """
-    logging.info("Enriching secret scanning data with repository admin information...")
-
-    if not secret_data:
-        return secret_data
-
-    # Step 1: Collect all unique repositories
-    unique_repos = set()
-    for alert in secret_data:
-        org_name = alert.get("Organization_Name")
-        repo_name = alert.get("Repository_Name")
-        if org_name and repo_name:
-            repo_full_name = f"{org_name}/{repo_name}"
-            unique_repos.add(repo_full_name)
-
-    logging.info(f"Found {len(unique_repos)} unique repositories to process")
-
-    # Step 2: Fetch repository admin data for all unique repos
-    repo_admins_cache = {}
-    for idx, repo_full_name in enumerate(unique_repos):
-        try:
-            repo_admins_cache[repo_full_name] = fetch_repo_admins(
-                repo_full_name, pat_cycler, admin_pat
-            )
-
-            # Log progress every 10 repositories
-            if (idx + 1) % 10 == 0:
-                logging.info(
-                    f"Fetched admin data for {idx + 1}/{len(unique_repos)} repositories..."
-                )
-
-        except Exception as e:
-            logging.error(f"Error fetching admins for {repo_full_name}: {e}")
-            repo_admins_cache[repo_full_name] = {"logins": None, "emails": None}
-
-    logging.info(f"Completed fetching admin data for {len(unique_repos)} repositories")
-
-    # Step 3: Map admin data back to all alerts
-    enriched_data = []
-    for alert in secret_data:
-        try:
-            org_name = alert.get("Organization_Name")
-            repo_name = alert.get("Repository_Name")
-
-            if org_name and repo_name:
-                repo_full_name = f"{org_name}/{repo_name}"
-                admin_data = repo_admins_cache.get(
-                    repo_full_name, {"logins": None, "emails": None}
-                )
-                alert["Repository_Admins"] = admin_data.get("logins")
-                alert["Repository_Admins_email_id"] = admin_data.get("emails")
-            else:
-                alert["Repository_Admins"] = None
-                alert["Repository_Admins_email_id"] = None
-
-            enriched_data.append(alert)
-
-        except Exception as e:
-            logging.error(f"Error mapping admin data to alert: {e}")
-            alert["Repository_Admins"] = None
-            alert["Repository_Admins_email_id"] = None
-            enriched_data.append(alert)
-
-    logging.info(f"Completed enrichment for {len(enriched_data)} alerts")
+    if ENABLE_REPO_ADMIN_ENRICHMENT:
+        logging.info(
+            f"Repository admin information added for {len(repo_admin_cache)} unique repositories"
+        )
     return enriched_data
 
 
@@ -1072,9 +1137,6 @@ def main():
         enterprise_slug, pats = load_config()
         pat_cycler = itertools.cycle(pats)
 
-        # Load the optional ALL_ORGS_WRITE_PAT for admin retrieval
-        admin_pat = load_all_orgs_write_pat()
-
         logging.info("Fetching secret scanning alerts using REST API...")
 
         base_api_url = "https://api.github.com"
@@ -1104,6 +1166,36 @@ def main():
             params["state"] = state_param
             logging.info(f"Secret Scanning: Using state filter '{state_param}'")
 
+        # Add secret_type parameter if specified
+        # By default, API returns only default patterns
+        # To include generic/custom patterns, you must specify them explicitly
+        if config["secret_types"] and config["secret_types"].lower() != "all":
+            params["secret_type"] = config["secret_types"]
+            logging.info(
+                f"Secret Scanning: Using secret_type filter '{config['secret_types']}'"
+            )
+            logging.info(
+                "NOTE: This will return specified secret types. To get ALL types including custom patterns, you may need to list them explicitly."
+            )
+        else:
+            logging.warning("=" * 80)
+            logging.warning(
+                "SECRET_TYPES not configured - API will return DEFAULT patterns ONLY"
+            )
+            logging.warning(
+                "If you have GENERIC/CUSTOM patterns, they will NOT be returned!"
+            )
+            logging.warning("")
+            logging.warning("To include generic/custom patterns:")
+            logging.warning(
+                "1. Find your custom pattern names from Enterprise/Org settings"
+            )
+            logging.warning(
+                "2. Set SECRET_TYPES in .env file (e.g., SECRET_TYPES=password,api_key)"
+            )
+            logging.warning("3. Or run: python discover_custom_patterns.py")
+            logging.warning("=" * 80)
+
         # Fetch secret scanning alerts
         try:
             max_results = config["test_limit"] if config["test_mode"] else None
@@ -1122,6 +1214,38 @@ def main():
             logging.info(
                 f"SUCCESS: Fetched {len(secret_scanning_alerts)} secret scanning alerts."
             )
+
+            # Provide helpful message if no results
+            if len(secret_scanning_alerts) == 0:
+                logging.warning("")
+                logging.warning("No alerts returned from API!")
+                logging.warning("")
+                if (
+                    not config.get("secret_types")
+                    or config["secret_types"].lower() == "all"
+                ):
+                    logging.warning("Possible reasons:")
+                    logging.warning(
+                        "1. No default pattern alerts exist in your enterprise"
+                    )
+                    logging.warning(
+                        "2. You only have GENERIC/CUSTOM pattern alerts (not returned by default)"
+                    )
+                    logging.warning("3. All alerts are in a state you filtered out")
+                    logging.warning("")
+                    logging.warning(
+                        "If you see alerts in the GitHub UI with 'results:generic' filter:"
+                    )
+                    logging.warning(
+                        "  → You MUST specify custom pattern names in SECRET_TYPES"
+                    )
+                    logging.warning(
+                        "  → Check Enterprise Settings > Security > Custom patterns for names"
+                    )
+                    logging.warning(
+                        "  → Example: SECRET_TYPES=password,internal_api_key"
+                    )
+                logging.warning("")
         except Exception as exc:
             logging.error(
                 f"ERROR: Failed to fetch secret scanning alerts: {type(exc).__name__}: {exc}"
@@ -1132,10 +1256,18 @@ def main():
         logging.info("Processing secret scanning alert data...")
         secret_scanning_data = extract_secret_scanning_data(secret_scanning_alerts)
 
-        # Enrich with admin information
-        if secret_scanning_data:
-            secret_scanning_data = enrich_secret_data_with_commit_info(
-                secret_scanning_data, pat_cycler, admin_pat
+        # Enrich with commit author information if enabled
+        if secret_scanning_data and os.getenv(
+            "ENABLE_COMMIT_ENRICHMENT", "false"
+        ).lower() in ["true", "1", "yes"]:
+            logging.info("Commit enrichment is enabled - fetching commit details...")
+            secret_scanning_data = enrich_secret_data_with_commit_details(
+                secret_scanning_data, pat_cycler
+            )
+            logging.info("Commit enrichment completed")
+        elif secret_scanning_data:
+            logging.info(
+                "Commit enrichment is disabled. Set ENABLE_COMMIT_ENRICHMENT=true to enable."
             )
 
             # Enrich with commit information to get committer GitHub handles (if enabled)
@@ -1161,10 +1293,19 @@ def main():
             timestamp=timestamp,
         )
 
-        # Log statistics
+        # Log statistics with pattern breakdown
         logging.info("=" * 80)
         logging.info("Data Processing Complete:")
         logging.info(f"  - Secret Scanning: {len(secret_scanning_data)} alerts")
+        if secret_scanning_data:
+            default_count = count_by_field(
+                secret_scanning_data, "Pattern_Category", "default"
+            )
+            generic_count = count_by_field(
+                secret_scanning_data, "Pattern_Category", "generic"
+            )
+            logging.info(f"    • Default Patterns: {default_count}")
+            logging.info(f"    • Generic Patterns: {generic_count}")
         logging.info("=" * 80)
 
         # Use custom filename if provided, otherwise generate default

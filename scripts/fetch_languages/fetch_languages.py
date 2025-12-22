@@ -63,12 +63,92 @@ class GitHubScanner:
         )
 
     def get_organizations_from_csv(
-        self, csv_file_path="scripts/fetch_languages/output/organizations.csv"
+        self, csv_file_path="scripts/output/organizations.csv"
     ):
         """
         Reads organization list from CSV file.
         Returns list of organization login names.
         """
+
+        # Check if the CSV file exists, if not try to generate it
+        if not os.path.exists(csv_file_path):
+            logging.warning(f"Organizations CSV file not found at: {csv_file_path}")
+
+            # Try alternative locations
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
+            possible_paths = [
+                os.path.join(root_dir, "organizations.csv"),
+                os.path.join(script_dir, "organizations.csv"),
+                os.path.join(root_dir, "output", "organizations.csv"),
+                os.path.join(script_dir, "output", "organizations.csv"),
+                os.path.join(root_dir, "scripts", "output", "organizations.csv"),
+            ]
+
+            csv_file = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    csv_file = path
+                    csv_file_path = path
+                    break
+
+            if not csv_file:
+                logging.warning(
+                    f"Organizations CSV file not found. Tried locations:\n"
+                    + "\n".join(f"  - {p}" for p in possible_paths)
+                )
+                logging.info(
+                    "Attempting to generate organizations.csv using fetch_orgs.py..."
+                )
+
+                # Try to run fetch_orgs.py to generate the organizations.csv file
+                fetch_orgs_path = os.path.join(
+                    root_dir, "scripts", "fetch_Orgs", "fetch_orgs.py"
+                )
+                if os.path.exists(fetch_orgs_path):
+                    try:
+                        import subprocess
+                        import sys
+
+                        logging.info(f"Running fetch_orgs.py from: {fetch_orgs_path}")
+                        result = subprocess.run(
+                            [sys.executable, fetch_orgs_path],
+                            capture_output=True,
+                            text=True,
+                            cwd=root_dir,
+                        )
+
+                        if result.returncode == 0:
+                            logging.info("Successfully executed fetch_orgs.py")
+                            # Check again for the CSV file in the expected location
+                            output_csv = os.path.join(
+                                root_dir, "scripts", "output", "organizations.csv"
+                            )
+                            if os.path.exists(output_csv):
+                                csv_file_path = output_csv
+                                logging.info(
+                                    f"Organizations CSV file created at: {csv_file_path}"
+                                )
+                            else:
+                                logging.error(
+                                    "fetch_orgs.py completed but organizations.csv not found at expected location"
+                                )
+                        else:
+                            logging.error(
+                                f"fetch_orgs.py failed with error: {result.stderr}"
+                            )
+                    except Exception as e:
+                        logging.error(f"Failed to execute fetch_orgs.py: {e}")
+                else:
+                    logging.error(f"fetch_orgs.py not found at: {fetch_orgs_path}")
+
+                if not os.path.exists(csv_file_path):
+                    logging.error(
+                        "Please create an organizations.csv file with a 'login' column containing org names, "
+                        "or ensure fetch_orgs.py is available and working properly."
+                    )
+                    return []
+
         try:
             logging.info(f"Reading organizations from: {csv_file_path}")
             df = pd.read_csv(csv_file_path)
