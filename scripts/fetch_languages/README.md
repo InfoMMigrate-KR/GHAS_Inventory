@@ -4,7 +4,7 @@ A Python tool for analyzing programming languages used across all repositories i
 
 ## Features
 
-- **GraphQL-Optimized**: Uses GitHub's GraphQL API for efficient data fetching (90% fewer API calls vs REST)
+
 - **Enterprise-wide Coverage**: Automatically discovers and analyzes all organizations and repositories
 - **Comprehensive Analysis**: 
   - Language distribution by repository
