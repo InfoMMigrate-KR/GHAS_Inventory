@@ -1063,29 +1063,17 @@ def main():
     # Change to use scripts/output instead of root/output
     output_dir = os.path.join(script_dir, "..", "output", "fetch_packages")
 
-    # Find organizations.csv file in multiple possible locations
+    # Step 1: Check for organizations.csv file in scripts/output folder
     input_csv_name = "organizations.csv"
-    possible_paths = [
-        # First priority: scripts/output (consistent with other scripts)
-        os.path.join(root_dir, "scripts", "output", input_csv_name),
-        os.path.join(script_dir, "..", "output", input_csv_name),
-        # Secondary: script directory and nearby
-        os.path.join(script_dir, input_csv_name),
-        # Legacy locations for backward compatibility
-        os.path.join(root_dir, input_csv_name),
-        os.path.join(root_dir, "output", input_csv_name),
-    ]
+    input_csv = os.path.join(root_dir, "scripts", "output", input_csv_name)
 
-    input_csv = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            input_csv = path
-            break
-
-    if not input_csv:
-        print(f"Error: Could not find {input_csv_name} file. Tried locations:")
-        for path in possible_paths:
-            print(f"  - {path}")
+    # Step 2: If file exists, use it as input
+    if os.path.exists(input_csv):
+        print(f"Found organizations.csv at: {input_csv}")
+        print(f"Using existing file as input for processing")
+    else:
+        # Step 3: If file doesn't exist, generate it freshly
+        print(f"Organizations CSV file not found at: {input_csv}")
         print("Attempting to generate organizations.csv using fetch_orgs.py...")
 
         # Try to run fetch_orgs.py to generate the organizations.csv file
@@ -1106,28 +1094,30 @@ def main():
 
                 if result.returncode == 0:
                     print("Successfully executed fetch_orgs.py")
-                    # Check again for the CSV file in the expected location
-                    output_csv = os.path.join(
-                        root_dir, "scripts", "output", "organizations.csv"
-                    )
-                    if os.path.exists(output_csv):
-                        input_csv = output_csv
+                    # Check for the CSV file in the expected location
+                    if os.path.exists(input_csv):
                         print(f"Organizations CSV file created at: {input_csv}")
                     else:
                         print(
-                            "fetch_orgs.py completed but organizations.csv not found at expected location"
+                            f"Error: fetch_orgs.py completed but organizations.csv not found at: {input_csv}"
                         )
+                        print(
+                            "Please ensure fetch_orgs.py generates the file in scripts/output directory."
+                        )
+                        return 1
                 else:
-                    print(f"fetch_orgs.py failed with error: {result.stderr}")
+                    print(f"Error: fetch_orgs.py failed with return code {result.returncode}")
+                    if result.stderr:
+                        print(f"Error output: {result.stderr}")
+                    return 1
             except Exception as e:
                 print(f"Failed to execute fetch_orgs.py: {e}")
+                return 1
         else:
-            print(f"fetch_orgs.py not found at: {fetch_orgs_path}")
-
-        if not input_csv:
+            print(f"Error: fetch_orgs.py not found at: {fetch_orgs_path}")
             print(
-                "Please create an organizations.csv file with a 'login' column containing org names, "
-                "or ensure fetch_orgs.py is available and working properly."
+                f"Please create an organizations.csv file at: {input_csv}\n"
+                "The file should contain organization names (one per line or with a 'login' column)."
             )
             return 1
 

@@ -272,38 +272,22 @@ class GitHubScanner:
         """
         logging.info("Fetching organizations from CSV...")
 
-        # Try multiple locations for the CSV file
-        possible_paths = []
-
-        if csv_path:
-            possible_paths.append(csv_path)
-
-        # Check common locations
+        # Get paths
         script_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.abspath(os.path.join(script_dir, "..", ".."))
 
-        possible_paths.extend(
-            [
-                os.path.join(script_dir, "organizations.csv"),
-                os.path.join(root_dir, "scripts", "output", "organizations.csv"),
-                os.path.join(script_dir, "..", "output", "organizations.csv"),
-            ]
-        )
+        # Step 1: Check for organizations.csv file in scripts/output folder
+        input_csv_name = "organizations.csv"
+        csv_file = os.path.join(root_dir, "scripts", "output", input_csv_name)
 
-        csv_file = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                csv_file = path
-                break
-
-        if not csv_file:
-            logging.warning(
-                f"Organizations CSV file not found. Tried locations:\n"
-                + "\n".join(f"  - {p}" for p in possible_paths)
-            )
-            logging.info(
-                "Attempting to generate organizations.csv using fetch_orgs.py..."
-            )
+        # Step 2: If file exists, use it as input
+        if os.path.exists(csv_file):
+            logging.info(f"Found organizations.csv at: {csv_file}")
+            logging.info(f"Using existing file as input for processing")
+        else:
+            # Step 3: If file doesn't exist, generate it freshly
+            logging.warning(f"Organizations CSV file not found at: {csv_file}")
+            logging.info("Attempting to generate organizations.csv using fetch_orgs.py...")
 
             # Try to run fetch_orgs.py to generate the organizations.csv file
             fetch_orgs_path = os.path.join(
@@ -324,42 +308,30 @@ class GitHubScanner:
 
                     if result.returncode == 0:
                         logging.info("Successfully executed fetch_orgs.py")
-                        # Check again for the CSV file in multiple expected locations
-                        potential_outputs = [
-                            os.path.join(root_dir, "scripts", "output", "organizations.csv"),
-                            os.path.join(script_dir, "..", "output", "organizations.csv"),
-                            os.path.join(root_dir, "output", "organizations.csv"),
-                        ]
-                        
-                        for output_csv in potential_outputs:
-                            if os.path.exists(output_csv):
-                                csv_file = output_csv
-                                logging.info(
-                                    f"Organizations CSV file created at: {csv_file}"
-                                )
-                                break
+                        # Check for the CSV file in the expected location
+                        if os.path.exists(csv_file):
+                            logging.info(f"Organizations CSV file created at: {csv_file}")
                         else:
                             logging.error(
-                                f"fetch_orgs.py completed but organizations.csv not found. Checked locations:\n" +
-                                "\n".join(f"  - {p}" for p in potential_outputs)
+                                f"Error: fetch_orgs.py completed but organizations.csv not found at: {csv_file}"
                             )
+                            logging.error(
+                                "Please ensure fetch_orgs.py generates the file in scripts/output directory."
+                            )
+                            return []
                     else:
-                        logging.error(
-                            f"fetch_orgs.py failed with error: {result.stderr}"
-                        )
+                        logging.error(f"Error: fetch_orgs.py failed with return code {result.returncode}")
+                        if result.stderr:
+                            logging.error(f"Error output: {result.stderr}")
+                        return []
                 except Exception as e:
                     logging.error(f"Failed to execute fetch_orgs.py: {e}")
+                    return []
             else:
-                logging.error(f"fetch_orgs.py not found at: {fetch_orgs_path}")
-
-            if not csv_file:
+                logging.error(f"Error: fetch_orgs.py not found at: {fetch_orgs_path}")
                 logging.error(
-                    "Could not find or generate organizations.csv file.\n"
-                    "Please either:\n"
-                    "1. Create an organizations.csv file (one org name per line) in one of these locations:\n" +
-                    "\n".join(f"   - {p}" for p in possible_paths) + "\n"
-                    "2. OR ensure the GitHub App is installed in at least one organization in your enterprise.\n"
-                    "   The script will auto-detect available installations."
+                    f"Please create an organizations.csv file at: {csv_file}\n"
+                    "The file should contain organization names (one per line or with a 'login' column)."
                 )
                 return []
 
