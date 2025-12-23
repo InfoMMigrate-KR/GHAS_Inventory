@@ -64,13 +64,8 @@ MEMORY_THRESHOLD_MB = int(
     os.getenv("MEMORY_THRESHOLD_MB", "1000")
 )  # Memory usage warning threshold
 RATE_LIMIT_BUFFER = int(
-    os.getenv("RATE_LIMIT_BUFFER", "100") or "100"
+    os.getenv("RATE_LIMIT_BUFFER") or "100"
 )  # Remaining requests before slowing down
-
-# Feature flags for enrichment
-ENABLE_REPO_ADMIN_ENRICHMENT = (
-    os.getenv("ENABLE_REPO_ADMIN_ENRICHMENT", "false").lower() == "true"
-)
 
 
 @dataclass
@@ -121,6 +116,7 @@ def validate_configuration() -> bool:
         "TIMEOUT": (10, 300),
         "MAX_CONCURRENT_ORGS": (1, 20),
         "CHUNK_SIZE": (100, 10000),
+        "RATE_LIMIT_BUFFER": (10, 1000),
     }
 
     for var, (min_val, max_val) in numeric_configs.items():
@@ -561,12 +557,9 @@ def load_alert_config() -> Dict[str, Any]:
     if config["test_mode"]:
         logging.info(f"  - Test Org Limit: {config['test_org_limit']}")
 
-    # Log enrichment settings
-    commit_enrichment_enabled = (
-        os.getenv("ENABLE_COMMIT_ENRICHMENT", "true").lower() == "true"
-    )
-    logging.info(f"  - Commit Enrichment: {commit_enrichment_enabled}")
-    logging.info(f"  - Repo Admin Enrichment: {ENABLE_REPO_ADMIN_ENRICHMENT}")
+    # Enrichment is always enabled
+    logging.info(f"  - Commit Enrichment: Enabled")
+    logging.info(f"  - Repo Admin Enrichment: Enabled")
 
     return config
 
@@ -989,8 +982,11 @@ def check_rate_limit(response: requests.Response, metrics: PerformanceMetrics) -
     if remaining:
         try:
             remaining_count = int(remaining)
-            # Ensure RATE_LIMIT_BUFFER is an int
-            buffer = int(RATE_LIMIT_BUFFER) if isinstance(RATE_LIMIT_BUFFER, str) else RATE_LIMIT_BUFFER
+            # Ensure RATE_LIMIT_BUFFER is always an int
+            try:
+                buffer = int(RATE_LIMIT_BUFFER)
+            except (ValueError, TypeError):
+                buffer = 100  # Default fallback
             
             if remaining_count < buffer:
                 if reset_time:
@@ -1099,8 +1095,28 @@ def fetch_all_pages(
             logging.error(f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}")
 
             # Don't retry on client errors (4xx) except rate limiting
-            if status_code and (status_code == 403 or status_code == 429):
-                # Rate limited - check if we should wait
+            if status_code == 403:
+                # Check if it's a rate limit or permission issue
+                if "rate limit" in error_msg.lower():
+                    retry_after = e.response.headers.get("Retry-After")
+                    if retry_after:
+                        wait_time = int(retry_after)
+                        logging.warning(
+                            f"Rate limited. Waiting {wait_time}s before retry..."
+                        )
+                        time.sleep(wait_time)
+                        continue  # Try again
+                else:
+                    # Permission error - provide helpful message
+                    logging.error(
+                        f"Permission denied (403) for {endpoint_url}. "
+                        f"Ensure GitHub App has 'Secret scanning alerts: Read' permission "
+                        f"and is installed in the organization."
+                    )
+                    break
+            
+            if status_code == 429:
+                # Rate limited
                 retry_after = e.response.headers.get("Retry-After")
                 if retry_after:
                     wait_time = int(retry_after)
@@ -1111,7 +1127,7 @@ def fetch_all_pages(
                     continue  # Try again
 
             if status_code and 400 <= status_code < 500:
-                logging.error(f"Client error - stopping pagination for {endpoint_url}")
+                logging.error(f"Client error {status_code} - stopping pagination for {endpoint_url}")
                 break
 
             # Let the retry decorator handle 5xx errors
@@ -1437,18 +1453,9 @@ def extract_and_enrich_data(
     # Convert generator to list for processing
     secret_scanning_data = list(extract_secret_scanning_data(all_alerts))
 
-    # Always enrich with repository admin information
+    # Enrich with commit author information (always enabled)
     if secret_scanning_data:
-        logging.info("Enriching with repository admin information...")
-        secret_scanning_data = enrich_with_repo_admin(
-            secret_scanning_data, github_app_auth, metrics
-        )
-
-    # Enrich with commit author information if enabled
-    if secret_scanning_data and os.getenv(
-        "ENABLE_COMMIT_ENRICHMENT", "false"
-    ).lower() in ["true", "1", "yes"]:
-        logging.info("Commit enrichment is enabled - fetching commit details...")
+        logging.info("Fetching commit details...")
 
         # Group alerts by organization for efficient session management
         alerts_by_org = defaultdict(list)
@@ -1481,10 +1488,6 @@ def extract_and_enrich_data(
                     logging.error(f"Error in commit enrichment: {e}")
 
         logging.info("Commit enrichment completed")
-    elif secret_scanning_data:
-        logging.info(
-            "Commit enrichment is disabled. Set ENABLE_COMMIT_ENRICHMENT=true to enable."
-        )
 
     if metrics:
         metrics.processing_times["data_extraction_and_enrichment"] = (
@@ -1616,8 +1619,8 @@ def enrich_organization_alerts(
                         )
                         secret_scanning_data[idx]["Commit_SHA"] = commit_info.get("sha")
 
-                    # Enrich with repository admin information if enabled
-                    if ENABLE_REPO_ADMIN_ENRICHMENT and repo_full_name:
+                    # Enrich with repository admin information (always enabled)
+                    if repo_full_name:
                         # Check cache first
                         if repo_full_name not in repo_admin_cache:
                             repo_admins = fetch_repository_admins(
@@ -1630,9 +1633,6 @@ def enrich_organization_alerts(
                         secret_scanning_data[idx]["Repo_Admin"] = repo_admin_cache[
                             repo_full_name
                         ]
-                    elif not ENABLE_REPO_ADMIN_ENRICHMENT:
-                        # Add empty column for consistency
-                        secret_scanning_data[idx]["Repo_Admin"] = ""
 
                 except Exception as e:
                     logging.warning(f"Failed to enrich alert {idx}: {e}")
@@ -1643,17 +1643,15 @@ def enrich_organization_alerts(
             logging.warning(
                 f"Could not authenticate for {org_name} - skipping enrichment"
             )
-            # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
-            if ENABLE_REPO_ADMIN_ENRICHMENT:
-                for idx, _ in org_alerts:
-                    secret_scanning_data[idx]["Repo_Admin"] = ""
+            # Add empty Repo_Admin column for this org's alerts
+            for idx, _ in org_alerts:
+                secret_scanning_data[idx]["Repo_Admin"] = ""
     except Exception as e:
         logging.error(f"Error enriching alerts for {org_name}: {e}")
-        # Add empty Repo_Admin column for this org's alerts if repo admin enrichment is enabled
-        if ENABLE_REPO_ADMIN_ENRICHMENT:
-            for idx, _ in org_alerts:
-                if "Repo_Admin" not in secret_scanning_data[idx]:
-                    secret_scanning_data[idx]["Repo_Admin"] = ""
+        # Add empty Repo_Admin column for this org's alerts
+        for idx, _ in org_alerts:
+            if "Repo_Admin" not in secret_scanning_data[idx]:
+                secret_scanning_data[idx]["Repo_Admin"] = ""
 
 
 def export_results(
