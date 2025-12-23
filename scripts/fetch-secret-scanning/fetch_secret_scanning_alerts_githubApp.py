@@ -353,7 +353,6 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Repository_Name": repo_name,
                 "Project_Code": project_code,
                 "Cost_Center": cost_center,
-                "Repo_Admin": None,  # Will be populated later if enrichment enabled
                 "Secret_Type": safe_get(alert, "secret_type_display_name"),
                 "Secret_Type_ID": safe_get(alert, "secret_type"),
                 "State": safe_get(alert, "state"),
@@ -743,39 +742,6 @@ def fetch_organizations(
 
 
 @retry_on_failure()
-def fetch_repository_admin(
-    repo_full_name: str, session: requests.Session
-) -> Optional[str]:
-    """
-    Fetch the repository admin/owner information.
-
-    Args:
-        repo_full_name: Full repository name (owner/repo)
-        session: Authenticated session
-
-    Returns:
-        Repository admin login or None if not available
-    """
-    if not repo_full_name:
-        return None
-
-    try:
-        url = f"https://api.github.com/repos/{repo_full_name}"
-        response = session.get(url, timeout=TIMEOUT)
-        response.raise_for_status()
-
-        repo_data = response.json()
-        repo_admin = safe_get(repo_data, "owner", "login")
-
-        logging.debug(f"Found admin for {repo_full_name}: {repo_admin}")
-        return repo_admin
-
-    except Exception as e:
-        logging.warning(f"Failed to fetch admin info for {repo_full_name}: {e}")
-        return None
-
-
-@retry_on_failure()
 def fetch_commit_info(
     repo_full_name: str, blob_sha: str, session: requests.Session
 ) -> Dict:
@@ -808,11 +774,9 @@ def fetch_commit_info(
         # that introduced the secret at the blob_sha location
         if commits:
             latest_commit = commits[0]
-            # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
-            # This ensures assign_alerts.py can properly assign alerts using the GitHub username
             return {
-                "author": safe_get(latest_commit, "author", "login") or safe_get(latest_commit, "commit", "author", "name"),
-                "committer": safe_get(latest_commit, "committer", "login") or safe_get(latest_commit, "commit", "committer", "name"),
+                "author": safe_get(latest_commit, "commit", "author", "name"),
+                "committer": safe_get(latest_commit, "commit", "committer", "name"),
                 "sha": safe_get(latest_commit, "sha"),
             }
 
@@ -1445,7 +1409,7 @@ def extract_and_enrich_data(
     all_alerts: List[Dict], github_app_auth: GitHubAppAuth, metrics: PerformanceMetrics
 ) -> List[Dict]:
     """
-    Extract and optionally enrich alert data with commit and repository admin information.
+    Extract and optionally enrich alert data with commit information.
     """
     stage_start = time.time()
     logging.info("Processing secret scanning alert data...")
@@ -1495,90 +1459,6 @@ def extract_and_enrich_data(
         )
 
     return secret_scanning_data
-
-
-def enrich_with_repo_admin(
-    secret_scanning_data: List[Dict],
-    github_app_auth: GitHubAppAuth,
-    metrics: PerformanceMetrics,
-) -> List[Dict]:
-    """
-    Enrich alert data with repository admin information.
-    """
-    # Group alerts by repository to minimize API calls
-    alerts_by_repo = defaultdict(list)
-    for idx, alert in enumerate(secret_scanning_data):
-        org_name = alert.get("Organization_Name")
-        repo_name = alert.get("Repository_Name")
-        if org_name and repo_name:
-            repo_full_name = f"{org_name}/{repo_name}"
-            alerts_by_repo[repo_full_name].append((idx, alert))
-
-    # Process each repository's alerts with concurrent processing
-    with ThreadPoolExecutor(
-        max_workers=min(MAX_CONCURRENT_ORGS, len(alerts_by_repo))
-    ) as executor:
-        futures = []
-
-        for repo_full_name, repo_alerts in alerts_by_repo.items():
-            org_name = repo_full_name.split("/")[0]
-            future = executor.submit(
-                enrich_repository_admin,
-                org_name,
-                repo_full_name,
-                repo_alerts,
-                github_app_auth,
-                secret_scanning_data,
-            )
-            futures.append(future)
-
-        # Wait for all enrichment tasks to complete
-        for future in as_completed(futures):
-            try:
-                future.result()  # This will raise any exceptions
-            except Exception as e:
-                logging.error(f"Error in repo admin enrichment: {e}")
-
-    return secret_scanning_data
-
-
-def enrich_repository_admin(
-    org_name: str,
-    repo_full_name: str,
-    repo_alerts: List[Tuple[int, Dict]],
-    github_app_auth: GitHubAppAuth,
-    secret_scanning_data: List[Dict],
-) -> None:
-    """
-    Enrich alerts for a single repository with admin information.
-    """
-    try:
-        # Authenticate for this organization
-        if not github_app_auth.authenticate_for_organization(org_name):
-            logging.warning(
-                f"Failed to authenticate for organization: {org_name}. Skipping repo admin enrichment."
-            )
-            return
-
-        # Get authenticated session
-        session = github_app_auth.get_authenticated_session()
-
-        # Fetch repository admin once for all alerts in this repo
-        repo_admin = fetch_repository_admin(repo_full_name, session)
-
-        # Update all alerts for this repository
-        for idx, alert in repo_alerts:
-            secret_scanning_data[idx]["Repo_Admin"] = repo_admin
-
-        logging.debug(
-            f"Enriched {len(repo_alerts)} alerts with repo admin '{repo_admin}' for {repo_full_name}"
-        )
-
-    except Exception as e:
-        logging.error(f"Failed to enrich repo admin for {repo_full_name}: {e}")
-        # Set admin to None for all alerts in this repo on failure
-        for idx, alert in repo_alerts:
-            secret_scanning_data[idx]["Repo_Admin"] = None
 
 
 def enrich_organization_alerts(
