@@ -815,9 +815,11 @@ def fetch_commit_info(
         # that introduced the secret at the blob_sha location
         if commits:
             latest_commit = commits[0]
+            # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
+            # This ensures assign_alerts.py can properly assign alerts using the GitHub username
             return {
-                "author": safe_get(latest_commit, "commit", "author", "name"),
-                "committer": safe_get(latest_commit, "commit", "committer", "name"),
+                "author": safe_get(latest_commit, "author", "login") or safe_get(latest_commit, "commit", "author", "name"),
+                "committer": safe_get(latest_commit, "committer", "login") or safe_get(latest_commit, "commit", "committer", "name"),
                 "sha": safe_get(latest_commit, "sha"),
             }
 
@@ -1091,13 +1093,13 @@ def fetch_all_pages(
                     metrics.memory_peak_mb = max(metrics.memory_peak_mb, memory_mb)
 
         except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code if e.response else "unknown"
+            status_code = e.response.status_code if e.response else None
             error_msg = e.response.text if e.response else str(e)
 
-            logging.error(f"HTTP Error {status_code} fetching {url}: {error_msg[:200]}")
+            logging.error(f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}")
 
             # Don't retry on client errors (4xx) except rate limiting
-            if status_code == 403 or status_code == 429:
+            if status_code and (status_code == 403 or status_code == 429):
                 # Rate limited - check if we should wait
                 retry_after = e.response.headers.get("Retry-After")
                 if retry_after:
@@ -1108,7 +1110,7 @@ def fetch_all_pages(
                     time.sleep(wait_time)
                     continue  # Try again
 
-            if 400 <= status_code < 500:
+            if status_code and 400 <= status_code < 500:
                 logging.error(f"Client error - stopping pagination for {endpoint_url}")
                 break
 
