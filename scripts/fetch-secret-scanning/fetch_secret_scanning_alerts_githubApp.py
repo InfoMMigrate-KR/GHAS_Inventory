@@ -774,9 +774,11 @@ def fetch_commit_info(
         # that introduced the secret at the blob_sha location
         if commits:
             latest_commit = commits[0]
+            # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
+            # This ensures assign_alerts.py can properly assign alerts using the GitHub username
             return {
-                "author": safe_get(latest_commit, "commit", "author", "name"),
-                "committer": safe_get(latest_commit, "commit", "committer", "name"),
+                "author": safe_get(latest_commit, "author", "login") or safe_get(latest_commit, "commit", "author", "name"),
+                "committer": safe_get(latest_commit, "committer", "login") or safe_get(latest_commit, "commit", "committer", "name"),
                 "sha": safe_get(latest_commit, "sha"),
             }
 
