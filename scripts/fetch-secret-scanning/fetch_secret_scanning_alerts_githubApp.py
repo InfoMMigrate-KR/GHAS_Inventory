@@ -618,8 +618,6 @@ def fetch_organizations_from_csv(csv_path: str = None) -> List[str]:
 
     possible_paths.extend(
         [
-            os.path.join(root_dir, "organizations.csv"),
-            os.path.join(script_dir, "organizations.csv"),
             os.path.join(root_dir, "scripts", "output", "organizations.csv"),
         ]
     )
@@ -689,9 +687,9 @@ def fetch_organizations_from_csv(csv_path: str = None) -> List[str]:
             # First, try reading as CSV with headers
             first_line = f.readline().strip()
             f.seek(0)  # Reset to beginning
-            
+
             # Check if first line looks like a header
-            if first_line.lower() in ['login', 'organization', 'org', 'name']:
+            if first_line.lower() in ["login", "organization", "org", "name"]:
                 # Has header, use DictReader
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -777,8 +775,10 @@ def fetch_commit_info(
             # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
             # This ensures assign_alerts.py can properly assign alerts using the GitHub username
             return {
-                "author": safe_get(latest_commit, "author", "login") or safe_get(latest_commit, "commit", "author", "name"),
-                "committer": safe_get(latest_commit, "committer", "login") or safe_get(latest_commit, "commit", "committer", "name"),
+                "author": safe_get(latest_commit, "author", "login")
+                or safe_get(latest_commit, "commit", "author", "name"),
+                "committer": safe_get(latest_commit, "committer", "login")
+                or safe_get(latest_commit, "commit", "committer", "name"),
                 "sha": safe_get(latest_commit, "sha"),
             }
 
@@ -953,7 +953,7 @@ def check_rate_limit(response: requests.Response, metrics: PerformanceMetrics) -
                 buffer = int(RATE_LIMIT_BUFFER)
             except (ValueError, TypeError):
                 buffer = 100  # Default fallback
-            
+
             if remaining_count < buffer:
                 if reset_time:
                     reset_timestamp = int(reset_time)
@@ -1058,7 +1058,9 @@ def fetch_all_pages(
             status_code = e.response.status_code if e.response else None
             error_msg = e.response.text if e.response else str(e)
 
-            logging.error(f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}")
+            logging.error(
+                f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}"
+            )
 
             # Don't retry on client errors (4xx) except rate limiting
             if status_code == 403:
@@ -1080,7 +1082,7 @@ def fetch_all_pages(
                         f"and is installed in the organization."
                     )
                     break
-            
+
             if status_code == 429:
                 # Rate limited
                 retry_after = e.response.headers.get("Retry-After")
@@ -1093,7 +1095,9 @@ def fetch_all_pages(
                     continue  # Try again
 
             if status_code and 400 <= status_code < 500:
-                logging.error(f"Client error {status_code} - stopping pagination for {endpoint_url}")
+                logging.error(
+                    f"Client error {status_code} - stopping pagination for {endpoint_url}"
+                )
                 break
 
             # Let the retry decorator handle 5xx errors
