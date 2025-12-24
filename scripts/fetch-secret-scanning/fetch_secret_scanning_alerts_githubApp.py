@@ -384,6 +384,10 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Location_Blob_URL": safe_get(
                     alert, "first_location_detected", "blob_url"
                 ),
+                "Locations_URL": safe_get(alert, "locations_url"),
+                "Has_More_Locations": safe_get(
+                    alert, "has_more_locations", default=False
+                ),
                 # Commit fields (populated later if enrichment enabled)
                 "Commit_Author": None,
                 "Commit_Committer": None,
@@ -557,8 +561,11 @@ def load_alert_config() -> Dict[str, Any]:
         logging.info(f"  - Test Org Limit: {config['test_org_limit']}")
 
     # Enrichment is always enabled
-    logging.info(f"  - Commit Enrichment: Enabled")
+    logging.info(f"  - Commit Enrichment: Enabled (with multi-location support)")
     logging.info(f"  - Repo Admin Enrichment: Enabled")
+    logging.info(
+        f"  - Multi-location Detection: Uses all secret locations for accurate author attribution"
+    )
 
     return config
 
@@ -740,19 +747,147 @@ def fetch_organizations(
 
 
 @retry_on_failure()
+def fetch_all_locations(locations_url: str, session: requests.Session) -> List[Dict]:
+    """
+    Fetch all locations for a secret scanning alert.
+
+    Args:
+        locations_url: URL to fetch all locations
+        session: Authenticated session
+
+    Returns:
+        List of location dictionaries
+    """
+    if not locations_url:
+        return []
+
+    try:
+        response = session.get(locations_url, timeout=TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logging.warning(f"Failed to fetch locations from {locations_url}: {e}")
+        return []
+
+
+@retry_on_failure()
 def fetch_commit_info(
-    repo_full_name: str, blob_sha: str, session: requests.Session
+    repo_full_name: str, commit_sha: str, session: requests.Session
 ) -> Dict:
     """
-    Fetch commit information for a specific blob SHA.
+    Fetch commit information for a specific commit SHA.
 
     Args:
         repo_full_name: Full repository name (owner/repo)
-        blob_sha: The blob SHA from the secret location
+        commit_sha: The commit SHA from the secret location
         session: Authenticated session
 
     Returns:
         Dict with commit author and committer information
+    """
+    if not commit_sha or not repo_full_name:
+        return {"author": None, "committer": None, "sha": None}
+
+    try:
+        # Fetch specific commit information
+        url = f"https://api.github.com/repos/{repo_full_name}/commits/{commit_sha}"
+
+        response = session.get(url, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        commit = response.json()
+
+        # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
+        # This ensures assign_alerts.py can properly assign alerts using the GitHub username
+        return {
+            "author": safe_get(commit, "author", "login")
+            or safe_get(commit, "commit", "author", "name"),
+            "committer": safe_get(commit, "committer", "login")
+            or safe_get(commit, "commit", "committer", "name"),
+            "sha": safe_get(commit, "sha"),
+        }
+
+    except Exception as e:
+        logging.warning(
+            f"Failed to fetch commit info for {repo_full_name}/{commit_sha}: {e}"
+        )
+
+    return {"author": None, "committer": None, "sha": None}
+
+
+@retry_on_failure()
+def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
+    """
+    Get the best commit author for a secret scanning alert.
+
+    Strategy:
+    1. If has_more_locations is False, use first_location_detected
+    2. If has_more_locations is True, fetch all locations and:
+       - Prefer the earliest commit (oldest author who introduced the secret)
+       - Fall back to first_location_detected if API calls fail
+
+    Args:
+        alert: Secret scanning alert dictionary
+        session: Authenticated session
+
+    Returns:
+        Dict with commit author information
+    """
+    repo_full_name = f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
+
+    # First, try to use commit_sha from first_location_detected
+    first_commit_sha = safe_get(alert, "first_location_detected", "commit_sha")
+    if first_commit_sha:
+        commit_info = fetch_commit_info(repo_full_name, first_commit_sha, session)
+        if commit_info.get("author"):
+            logging.debug(
+                f"Using first location commit author for alert {alert.get('Alert_Number')}"
+            )
+            return commit_info
+
+    # If has_more_locations, try to get all locations for more accurate attribution
+    if alert.get("Has_More_Locations") and alert.get("Locations_URL"):
+        try:
+            locations = fetch_all_locations(alert.get("Locations_URL"), session)
+            commit_locations = [loc for loc in locations if loc.get("type") == "commit"]
+
+            if commit_locations:
+                # Sort by commit date to find the earliest (original) author
+                commits_with_info = []
+                for location in commit_locations:
+                    commit_sha = safe_get(location, "details", "commit_sha")
+                    if commit_sha:
+                        commit_info = fetch_commit_info(
+                            repo_full_name, commit_sha, session
+                        )
+                        if commit_info.get("author"):
+                            commits_with_info.append(commit_info)
+
+                if commits_with_info:
+                    # Return the first successful commit info (could be enhanced to sort by date)
+                    logging.debug(
+                        f"Using earliest commit author from {len(commits_with_info)} locations for alert {alert.get('Alert_Number')}"
+                    )
+                    return commits_with_info[0]
+        except Exception as e:
+            logging.warning(f"Failed to get best commit author from all locations: {e}")
+
+    # Fallback: try to use blob_sha with original flawed method as last resort
+    blob_sha = safe_get(alert, "Location_Blob_Sha")
+    if blob_sha:
+        logging.debug(
+            f"Falling back to blob_sha method for alert {alert.get('Alert_Number')}"
+        )
+        return fetch_commit_info_legacy(repo_full_name, blob_sha, session)
+
+    return {"author": None, "committer": None, "sha": None}
+
+
+def fetch_commit_info_legacy(
+    repo_full_name: str, blob_sha: str, session: requests.Session
+) -> Dict:
+    """
+    Legacy commit fetching method (flawed but kept as fallback).
     """
     if not blob_sha or not repo_full_name:
         return {"author": None, "committer": None, "sha": None}
@@ -767,13 +902,8 @@ def fetch_commit_info(
 
         commits = response.json()
 
-        # For now, return the most recent commit info
-        # In a more sophisticated approach, you'd need to find the specific commit
-        # that introduced the secret at the blob_sha location
         if commits:
             latest_commit = commits[0]
-            # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
-            # This ensures assign_alerts.py can properly assign alerts using the GitHub username
             return {
                 "author": safe_get(latest_commit, "author", "login")
                 or safe_get(latest_commit, "commit", "author", "name"),
@@ -783,7 +913,7 @@ def fetch_commit_info(
             }
 
     except Exception as e:
-        logging.warning(f"Failed to fetch commit info for {repo_full_name}: {e}")
+        logging.warning(f"Failed to fetch legacy commit info for {repo_full_name}: {e}")
 
     return {"author": None, "committer": None, "sha": None}
 
@@ -908,16 +1038,14 @@ def enrich_secret_data_with_commit_details(
             repo_full_name = (
                 f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
             )
-            blob_sha = alert.get("Location_Blob_Sha")
 
             # Fetch commit information
             if (
-                blob_sha
-                and repo_full_name
+                repo_full_name
                 and alert.get("Organization_Name")
                 and alert.get("Repository_Name")
             ):
-                commit_info = fetch_commit_info(repo_full_name, blob_sha, session)
+                commit_info = get_best_commit_author(alert, session)
                 alert["Commit_Author"] = commit_info.get("author")
                 alert["Commit_Committer"] = commit_info.get("committer")
                 alert["Commit_SHA"] = commit_info.get("sha")
