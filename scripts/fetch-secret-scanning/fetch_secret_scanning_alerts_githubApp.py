@@ -388,6 +388,8 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Has_More_Locations": safe_get(
                     alert, "has_more_locations", default=False
                 ),
+                # Store the raw first_location_detected for enrichment
+                "first_location_detected": alert.get("first_location_detected"),
                 # Commit fields (populated later if enrichment enabled)
                 "Commit_Author": None,
                 "Commit_Committer": None,
@@ -797,6 +799,16 @@ def fetch_commit_info(
 
         commit = response.json()
 
+        # List of automated GitHub users to filter out FROM AUTHOR ONLY
+        # We want to show actual committer even if it's web-flow
+        AUTOMATED_USERS = {
+            "web-flow",  # GitHub web interface
+            "github-actions[bot]",  # GitHub Actions bot
+            "dependabot[bot]",  # Dependabot
+            "renovate[bot]",  # Renovate bot
+            "greenkeeper[bot]",  # Greenkeeper bot
+        }
+
         # Check if the author/committer accounts still exist
         github_author = safe_get(commit, "author", "login")
         github_committer = safe_get(commit, "committer", "login")
@@ -804,23 +816,32 @@ def fetch_commit_info(
         git_author_name = safe_get(commit, "commit", "author", "name")
         git_committer_name = safe_get(commit, "commit", "committer", "name")
 
+        # Filter out automated users from AUTHOR only
+        # User wants to see the actual committer (even if it's web-flow) for transparency
+        if github_author in AUTOMATED_USERS:
+            logging.debug(
+                f"Filtering out automated author '{github_author}' for {commit_sha[:8]}..."
+            )
+            github_author = None
+
         # Determine the best author to use and track the method
         author = None
         method = "unknown"
 
         if github_author:
-            # GitHub account exists and is accessible
+            # GitHub account exists and is accessible (and not automated)
             author = github_author
             method = "github_account"
-        elif git_author_name:
-            # GitHub account not available, use git commit name
+        elif git_author_name and git_author_name not in AUTOMATED_USERS:
+            # GitHub account not available, use git commit name if not automated
             author = git_author_name
             method = "git_name_only"
             logging.info(
                 f"Using git name '{git_author_name}' for {commit_sha[:8]}... (GitHub account unavailable)"
             )
 
-        # Use similar logic for committer
+        # For committer: show the ACTUAL committer without filtering
+        # This provides transparency about who/what actually committed the code
         committer = github_committer or git_committer_name
 
         return {
@@ -869,21 +890,31 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     if first_commit_sha:
         attempted_commits.add(first_commit_sha)
         commit_info = fetch_commit_info(repo_full_name, first_commit_sha, session)
-        if commit_info.get("author"):
+        if commit_info.get("author") or commit_info.get("committer"):
+            # Success! We have commit info (author and/or committer)
             logging.debug(
-                f"Using first location commit author for alert {alert_number}"
+                f"Using first location commit for alert {alert_number}: {first_commit_sha[:8]}..."
             )
             best_method = f"first_location_{commit_info.get('method', 'unknown')}"
             return {
                 "author": commit_info.get("author"),
                 "committer": commit_info.get("committer"),
-                "sha": commit_info.get("sha"),
+                "sha": commit_info.get("sha")
+                or first_commit_sha,  # Preserve original SHA
                 "method": best_method,
             }
         else:
-            logging.debug(
-                f"First location commit SHA {first_commit_sha[:8]}... failed for alert {alert_number}"
+            # Commit exists in alert but API can't fetch it (deleted/force-pushed)
+            # Keep the SHA but mark author as unknown
+            logging.warning(
+                f"First location commit SHA {first_commit_sha[:8]}... is inaccessible via API for alert {alert_number} - keeping SHA but author unknown"
             )
+            return {
+                "author": None,
+                "committer": None,
+                "sha": first_commit_sha,  # Keep the original commit SHA from the alert
+                "method": "commit_inaccessible_WARNING",
+            }
 
     # If has_more_locations, try to get all locations for more accurate attribution
     if alert.get("Has_More_Locations") and alert.get("Locations_URL"):
@@ -947,9 +978,11 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
             f"Falling back to legacy blob_sha method for alert {alert_number} - attribution may be inaccurate"
         )
         legacy_info = fetch_commit_info_legacy(repo_full_name, blob_sha, session)
-        if legacy_info.get("author"):
+        # Accept legacy result even if author is None (user prefers blank to wrong attribution)
+        # We still return valid committer info for transparency
+        if legacy_info.get("committer") or legacy_info.get("sha"):
             return {
-                "author": legacy_info.get("author"),
+                "author": legacy_info.get("author"),  # May be None - that's OK
                 "committer": legacy_info.get("committer"),
                 "sha": legacy_info.get("sha"),
                 "method": "legacy_fallback_WARNING",
@@ -965,8 +998,23 @@ def fetch_commit_info_legacy(
     repo_full_name: str, blob_sha: str, session: requests.Session
 ) -> Dict:
     """
-    Legacy commit fetching method (flawed but kept as fallback).
+    Legacy commit fetching method (flawed - uses recent commits, not actual secret commit).
+
+    IMPORTANT: This method is unreliable for author attribution because it uses
+    the most recent commit, NOT the commit where the secret was introduced.
+
+    User preference: Leave author BLANK rather than show potentially wrong attribution.
+    They will use Repo_Admin for assignment if Commit_Author is empty.
     """
+    # List of automated GitHub users
+    AUTOMATED_USERS = {
+        "web-flow",
+        "github-actions[bot]",
+        "dependabot[bot]",
+        "renovate[bot]",
+        "greenkeeper[bot]",
+    }
+
     if not blob_sha or not repo_full_name:
         return {"author": None, "committer": None, "sha": None}
 
@@ -982,11 +1030,30 @@ def fetch_commit_info_legacy(
 
         if commits:
             latest_commit = commits[0]
+
+            # Get author and committer info
+            github_author = safe_get(latest_commit, "author", "login")
+            git_author_name = safe_get(latest_commit, "commit", "author", "name")
+            github_committer = safe_get(latest_commit, "committer", "login")
+            git_committer_name = safe_get(latest_commit, "commit", "committer", "name")
+
+            # CRITICAL: Don't use legacy fallback for author - it's unreliable
+            # User prefers empty author over wrong author for assignment purposes
+            # Legacy fallback always returns None for author to avoid wrong attribution
+            author = None
+            if github_author and github_author not in AUTOMATED_USERS:
+                # Even if we found a human, don't use it - it's from a recent commit, not the secret's commit
+                logging.warning(
+                    f"Legacy fallback found human author '{github_author}' in recent commits - IGNORING to prevent wrong attribution. Use Repo_Admin for assignment."
+                )
+            # Always leave author blank for legacy fallback - user will use Repo_Admin instead
+
+            # Show actual committer for transparency (even if web-flow)
+            committer = github_committer or git_committer_name
+
             return {
-                "author": safe_get(latest_commit, "author", "login")
-                or safe_get(latest_commit, "commit", "author", "name"),
-                "committer": safe_get(latest_commit, "committer", "login")
-                or safe_get(latest_commit, "commit", "committer", "name"),
+                "author": author,
+                "committer": committer,
                 "sha": safe_get(latest_commit, "sha"),
             }
 
