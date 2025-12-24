@@ -1653,11 +1653,9 @@ def enrich_organization_alerts(
                     repo_full_name = f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
                     blob_sha = alert.get("Location_Blob_Sha")
 
-                    # Enrich with commit information
-                    if blob_sha and repo_full_name:
-                        commit_info = fetch_commit_info(
-                            repo_full_name, blob_sha, session
-                        )
+                    # Enrich with commit information using improved logic
+                    if repo_full_name:
+                        commit_info = get_best_commit_author(alert, session)
                         secret_scanning_data[idx]["Commit_Author"] = commit_info.get(
                             "author"
                         )
