@@ -783,10 +783,10 @@ def fetch_commit_info(
         session: Authenticated session
 
     Returns:
-        Dict with commit author and committer information
+        Dict with commit author and committer information, plus attribution method
     """
     if not commit_sha or not repo_full_name:
-        return {"author": None, "committer": None, "sha": None}
+        return {"author": None, "committer": None, "sha": None, "method": "no_data"}
 
     try:
         # Fetch specific commit information
@@ -797,14 +797,37 @@ def fetch_commit_info(
 
         commit = response.json()
 
-        # Use 'author.login' for GitHub username (not 'commit.author.name' which is the full name)
-        # This ensures assign_alerts.py can properly assign alerts using the GitHub username
+        # Check if the author/committer accounts still exist
+        github_author = safe_get(commit, "author", "login")
+        github_committer = safe_get(commit, "committer", "login")
+
+        git_author_name = safe_get(commit, "commit", "author", "name")
+        git_committer_name = safe_get(commit, "commit", "committer", "name")
+
+        # Determine the best author to use and track the method
+        author = None
+        method = "unknown"
+
+        if github_author:
+            # GitHub account exists and is accessible
+            author = github_author
+            method = "github_account"
+        elif git_author_name:
+            # GitHub account not available, use git commit name
+            author = git_author_name
+            method = "git_name_only"
+            logging.info(
+                f"Using git name '{git_author_name}' for {commit_sha[:8]}... (GitHub account unavailable)"
+            )
+
+        # Use similar logic for committer
+        committer = github_committer or git_committer_name
+
         return {
-            "author": safe_get(commit, "author", "login")
-            or safe_get(commit, "commit", "author", "name"),
-            "committer": safe_get(commit, "committer", "login")
-            or safe_get(commit, "commit", "committer", "name"),
+            "author": author,
+            "committer": committer,
             "sha": safe_get(commit, "sha"),
+            "method": method,
         }
 
     except Exception as e:
@@ -812,7 +835,7 @@ def fetch_commit_info(
             f"Failed to fetch commit info for {repo_full_name}/{commit_sha}: {e}"
         )
 
-    return {"author": None, "committer": None, "sha": None}
+    return {"author": None, "committer": None, "sha": None, "method": "api_failed"}
 
 
 @retry_on_failure()
@@ -839,6 +862,7 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
 
     # Track commit SHAs we've already tried to avoid duplicates
     attempted_commits = set()
+    best_method = "unknown"
 
     # First, try to use commit_sha from first_location_detected
     first_commit_sha = safe_get(alert, "first_location_detected", "commit_sha")
@@ -849,7 +873,13 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
             logging.debug(
                 f"Using first location commit author for alert {alert_number}"
             )
-            return commit_info
+            best_method = f"first_location_{commit_info.get('method', 'unknown')}"
+            return {
+                "author": commit_info.get("author"),
+                "committer": commit_info.get("committer"),
+                "sha": commit_info.get("sha"),
+                "method": best_method,
+            }
         else:
             logging.debug(
                 f"First location commit SHA {first_commit_sha[:8]}... failed for alert {alert_number}"
@@ -881,7 +911,15 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
                         logging.debug(
                             f"Successfully found commit author from SHA {commit_sha[:8]}... for alert {alert_number}"
                         )
-                        return commit_info
+                        best_method = (
+                            f"multi_location_{commit_info.get('method', 'unknown')}"
+                        )
+                        return {
+                            "author": commit_info.get("author"),
+                            "committer": commit_info.get("committer"),
+                            "sha": commit_info.get("sha"),
+                            "method": best_method,
+                        }
                     else:
                         logging.debug(
                             f"Commit SHA {commit_sha[:8]}... failed for alert {alert_number}"
@@ -905,15 +943,22 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     # Fallback: try to use blob_sha with original flawed method as last resort
     blob_sha = safe_get(alert, "Location_Blob_Sha")
     if blob_sha:
-        logging.debug(
-            f"Falling back to legacy blob_sha method for alert {alert_number}"
+        logging.warning(
+            f"Falling back to legacy blob_sha method for alert {alert_number} - attribution may be inaccurate"
         )
-        return fetch_commit_info_legacy(repo_full_name, blob_sha, session)
+        legacy_info = fetch_commit_info_legacy(repo_full_name, blob_sha, session)
+        if legacy_info.get("author"):
+            return {
+                "author": legacy_info.get("author"),
+                "committer": legacy_info.get("committer"),
+                "sha": legacy_info.get("sha"),
+                "method": "legacy_fallback_WARNING",
+            }
 
     logging.debug(
         f"No commit author found for alert {alert_number} - all methods failed"
     )
-    return {"author": None, "committer": None, "sha": None}
+    return {"author": None, "committer": None, "sha": None, "method": "all_failed"}
 
 
 def fetch_commit_info_legacy(
@@ -1663,6 +1708,9 @@ def enrich_organization_alerts(
                             "committer"
                         )
                         secret_scanning_data[idx]["Commit_SHA"] = commit_info.get("sha")
+                        secret_scanning_data[idx]["Commit_Attribution_Method"] = (
+                            commit_info.get("method")
+                        )
 
                     # Enrich with repository admin information (always enabled)
                     if repo_full_name:
