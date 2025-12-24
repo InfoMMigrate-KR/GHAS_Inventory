@@ -823,8 +823,9 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     Strategy:
     1. If has_more_locations is False, use first_location_detected
     2. If has_more_locations is True, fetch all locations and:
-       - Prefer the earliest commit (oldest author who introduced the secret)
-       - Fall back to first_location_detected if API calls fail
+       - Deduplicate commit SHAs to avoid redundant API calls
+       - Try each unique commit SHA once
+       - Fall back to legacy blob_sha method if all commits are inaccessible
 
     Args:
         alert: Secret scanning alert dictionary
@@ -834,16 +835,25 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
         Dict with commit author information
     """
     repo_full_name = f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
+    alert_number = alert.get("Alert_Number", "unknown")
+
+    # Track commit SHAs we've already tried to avoid duplicates
+    attempted_commits = set()
 
     # First, try to use commit_sha from first_location_detected
     first_commit_sha = safe_get(alert, "first_location_detected", "commit_sha")
     if first_commit_sha:
+        attempted_commits.add(first_commit_sha)
         commit_info = fetch_commit_info(repo_full_name, first_commit_sha, session)
         if commit_info.get("author"):
             logging.debug(
-                f"Using first location commit author for alert {alert.get('Alert_Number')}"
+                f"Using first location commit author for alert {alert_number}"
             )
             return commit_info
+        else:
+            logging.debug(
+                f"First location commit SHA {first_commit_sha[:8]}... failed for alert {alert_number}"
+            )
 
     # If has_more_locations, try to get all locations for more accurate attribution
     if alert.get("Has_More_Locations") and alert.get("Locations_URL"):
@@ -852,34 +862,57 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
             commit_locations = [loc for loc in locations if loc.get("type") == "commit"]
 
             if commit_locations:
-                # Sort by commit date to find the earliest (original) author
-                commits_with_info = []
+                # Collect unique commit SHAs we haven't tried yet
+                unique_commit_shas = []
                 for location in commit_locations:
                     commit_sha = safe_get(location, "details", "commit_sha")
-                    if commit_sha:
-                        commit_info = fetch_commit_info(
-                            repo_full_name, commit_sha, session
-                        )
-                        if commit_info.get("author"):
-                            commits_with_info.append(commit_info)
+                    if commit_sha and commit_sha not in attempted_commits:
+                        unique_commit_shas.append(commit_sha)
+                        attempted_commits.add(commit_sha)
 
-                if commits_with_info:
-                    # Return the first successful commit info (could be enhanced to sort by date)
+                logging.debug(
+                    f"Found {len(unique_commit_shas)} unique commit SHAs to try for alert {alert_number}"
+                )
+
+                # Try each unique commit SHA
+                for commit_sha in unique_commit_shas:
+                    commit_info = fetch_commit_info(repo_full_name, commit_sha, session)
+                    if commit_info.get("author"):
+                        logging.debug(
+                            f"Successfully found commit author from SHA {commit_sha[:8]}... for alert {alert_number}"
+                        )
+                        return commit_info
+                    else:
+                        logging.debug(
+                            f"Commit SHA {commit_sha[:8]}... failed for alert {alert_number}"
+                        )
+
+                # If all unique commits failed
+                if unique_commit_shas:
                     logging.debug(
-                        f"Using earliest commit author from {len(commits_with_info)} locations for alert {alert.get('Alert_Number')}"
+                        f"All {len(unique_commit_shas)} unique commit SHAs failed for alert {alert_number}, falling back to legacy method"
                     )
-                    return commits_with_info[0]
+                else:
+                    logging.debug(
+                        f"No new commit SHAs to try for alert {alert_number} (all were duplicates)"
+                    )
+
         except Exception as e:
-            logging.warning(f"Failed to get best commit author from all locations: {e}")
+            logging.warning(
+                f"Failed to get commit author from all locations for alert {alert_number}: {e}"
+            )
 
     # Fallback: try to use blob_sha with original flawed method as last resort
     blob_sha = safe_get(alert, "Location_Blob_Sha")
     if blob_sha:
         logging.debug(
-            f"Falling back to blob_sha method for alert {alert.get('Alert_Number')}"
+            f"Falling back to legacy blob_sha method for alert {alert_number}"
         )
         return fetch_commit_info_legacy(repo_full_name, blob_sha, session)
 
+    logging.debug(
+        f"No commit author found for alert {alert_number} - all methods failed"
+    )
     return {"author": None, "committer": None, "sha": None}
 
 
