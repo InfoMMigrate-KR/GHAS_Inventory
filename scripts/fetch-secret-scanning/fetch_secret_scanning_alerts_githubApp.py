@@ -774,21 +774,28 @@ def fetch_all_locations(locations_url: str, session: requests.Session) -> List[D
 
 @retry_on_failure()
 def fetch_commit_info(
-    repo_full_name: str, commit_sha: str, session: requests.Session
+    repo_full_name: str, commit_sha: str, session: requests.Session, depth: int = 0
 ) -> Dict:
     """
     Fetch commit information for a specific commit SHA.
+    Handles merge commits by checking parent commits for the actual code author.
 
     Args:
         repo_full_name: Full repository name (owner/repo)
         commit_sha: The commit SHA from the secret location
         session: Authenticated session
+        depth: Recursion depth to prevent infinite loops (max 2 levels)
 
     Returns:
         Dict with commit author and committer information, plus attribution method
     """
     if not commit_sha or not repo_full_name:
         return {"author": None, "committer": None, "sha": None, "method": "no_data"}
+
+    # Prevent deep recursion
+    if depth > 2:
+        logging.debug(f"Max recursion depth reached for {commit_sha[:8]}")
+        return {"author": None, "committer": None, "sha": None, "method": "max_depth"}
 
     try:
         # Fetch specific commit information
@@ -815,27 +822,62 @@ def fetch_commit_info(
 
         git_author_name = safe_get(commit, "commit", "author", "name")
         git_committer_name = safe_get(commit, "commit", "committer", "name")
+        
+        # Check if this is a merge commit
+        parents = commit.get("parents", [])
+        is_merge_commit = len(parents) > 1
 
         # Filter out automated users from AUTHOR only
         # User wants to see the actual committer (even if it's web-flow) for transparency
-        if github_author in AUTOMATED_USERS:
+        is_automated_author = github_author in AUTOMATED_USERS
+        
+        if is_automated_author:
             logging.debug(
-                f"Filtering out automated author '{github_author}' for {commit_sha[:8]}..."
+                f"Detected automated author '{github_author}' for {commit_sha[:8]}..."
             )
-            github_author = None
 
-        # Determine the best author to use and track the method
+        # Special handling for merge commits with automated authors
+        if is_merge_commit and is_automated_author and depth < 2:
+            logging.info(
+                f"Merge commit {commit_sha[:8]} detected with automated author. Checking parent commits..."
+            )
+            
+            # Try to get the actual author from parent commits
+            # Typically, parents[1] is the feature branch with the actual changes
+            for parent_idx, parent in enumerate(parents):
+                parent_sha = parent.get("sha")
+                if not parent_sha:
+                    continue
+                
+                logging.debug(f"Checking parent {parent_idx + 1}/{len(parents)}: {parent_sha[:8]}")
+                parent_info = fetch_commit_info(repo_full_name, parent_sha, session, depth + 1)
+                
+                # If we found a non-automated author in a parent, use it
+                if parent_info.get("author") and parent_info.get("method") not in ["no_data", "max_depth", "api_failed"]:
+                    logging.info(
+                        f"Found actual author '{parent_info.get('author')}' from parent commit {parent_sha[:8]}"
+                    )
+                    return {
+                        "author": parent_info.get("author"),
+                        "committer": github_committer or git_committer_name,  # Keep merge committer
+                        "sha": commit_sha,  # Use original merge commit SHA
+                        "method": f"merge_parent_{parent_info.get('method')}",
+                    }
+            
+            logging.debug(f"No valid author found in parent commits for {commit_sha[:8]}")
+
+        # Standard processing for non-merge commits or when parent lookup failed
         author = None
         method = "unknown"
 
-        if github_author:
+        if github_author and not is_automated_author:
             # GitHub account exists and is accessible (and not automated)
             author = github_author
-            method = "github_account"
+            method = "github_account" if not is_merge_commit else "merge_github_account"
         elif git_author_name and git_author_name not in AUTOMATED_USERS:
             # GitHub account not available, use git commit name if not automated
             author = git_author_name
-            method = "git_name_only"
+            method = "git_name_only" if not is_merge_commit else "merge_git_name_only"
             logging.info(
                 f"Using git name '{git_author_name}' for {commit_sha[:8]}... (GitHub account unavailable)"
             )
