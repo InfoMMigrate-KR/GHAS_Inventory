@@ -373,10 +373,13 @@ class GitHubAppAuth:
 
     def get_authenticated_session(self) -> requests.Session:
         """
-        Get an authenticated requests session
+        Get an authenticated requests session with current token
+
+        Returns a NEW session object to ensure thread-safety when
+        processing multiple organizations concurrently.
 
         Returns:
-            requests.Session: Session with proper authentication headers
+            requests.Session: New session with proper authentication headers
         """
         if not self.access_token:
             raise ValueError(
@@ -384,7 +387,20 @@ class GitHubAppAuth:
             )
 
         self._refresh_token_if_needed()
-        return self.session
+
+        # Create a NEW session for thread-safety
+        # This prevents token conflicts when processing multiple orgs concurrently
+        new_session = requests.Session()
+        new_session.verify = self.verify_ssl
+        new_session.headers.update(
+            {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+        )
+
+        return new_session
 
     def is_authenticated(self) -> bool:
         """
