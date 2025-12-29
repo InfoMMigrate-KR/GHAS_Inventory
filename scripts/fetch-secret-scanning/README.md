@@ -1,18 +1,59 @@
 # Secret Scanning Alerts Fetcher
 
-This script fetches secret scanning alerts from GitHub organizations using GitHub App authentication.
+This directory contains scripts to fetch secret scanning alerts from GitHub organizations.
+
+## Available Scripts
+
+### 1. fetch_secret_scanning_alerts.py (PAT-based)
+Uses Personal Access Tokens (PAT) for authentication. Simpler setup but requires proper PAT permissions.
+
+### 2. fetch_secret_scanning_alerts_githubApp.py (GitHub App-based)
+Uses GitHub App authentication. More secure and better for enterprise environments with multiple organizations.
 
 ## Overview
 
-Since GitHub Enterprise Apps don't have direct access to enterprise-level security alerts, this script:
-1. Fetches all organizations in the enterprise using GraphQL
-2. Authenticates to each organization using GitHub App installation tokens
-3. Fetches secret scanning alerts per organization
-4. Aggregates and exports the results
+These scripts fetch secret scanning alerts from GitHub organizations. Since GitHub Enterprise Apps don't have direct access to enterprise-level security alerts, the scripts:
+1. Fetch all organizations in the enterprise using GraphQL (or use a provided list)
+2. Authenticate to each organization
+3. Fetch secret scanning alerts per organization
+4. Aggregate and export the results
+
+## Which Script to Use?
+
+- **Use PAT-based script** if:
+  - You have a PAT with appropriate permissions
+  - You're working with a smaller number of organizations
+  - You want simpler, faster setup
+
+- **Use GitHub App script** if:
+  - You have a GitHub App configured and installed
+  - You're working in an enterprise environment
+  - You need more granular permissions and better auditability
 
 ## Prerequisites
 
-### 1. GitHub App Setup
+### Option 1: PAT-based Authentication (fetch_secret_scanning_alerts.py)
+
+Environment variables needed:
+```env
+# Personal Access Token with appropriate permissions
+GH_PATS=your_pat_token_here
+# Or use comma-separated list for multiple tokens
+GH_PATS=token1,token2,token3
+
+# Enterprise slug (optional, for enterprise-wide queries)
+GH_ENTERPRISE_SLUG=your-enterprise-slug
+
+# Optional: Alert Configuration
+ALERT_STATE=all                    # Options: open, resolved, all (default: all)
+OUTPUT_FILENAME=secret_scanning_report  # Default output filename
+OUTPUT_FORMAT=csv                  # Options: csv, xlsx, both (default: csv)
+ENABLE_COMMIT_ENRICHMENT=false     # Set to true to fetch commit author info (uses more API calls)
+```
+
+### Option 2: GitHub App Authentication (fetch_secret_scanning_alerts_githubApp.py)
+
+#### 1. GitHub App Setup
 
 You need to create and install a GitHub App with the following permissions:
 - **Repository permissions:**
@@ -23,11 +64,11 @@ You need to create and install a GitHub App with the following permissions:
 - **Organization permissions:**
   - Members: Read-only (optional, for organization access)
 
-### 2. Install the GitHub App
+#### 2. Install the GitHub App
 
 Install the GitHub App to all organizations in your enterprise where you want to fetch secret scanning alerts.
 
-### 3. Environment Variables
+#### 3. Environment Variables
 
 Create a `.env` file in the project root with the following variables:
 
@@ -80,7 +121,16 @@ scripts/
 
 ## Usage
 
-### Basic Usage
+### PAT-based Script
+
+Run the script from the command line:
+
+```bash
+cd scripts/fetch-secret-scanning
+python fetch_secret_scanning_alerts.py
+```
+
+### GitHub App Script
 
 Run the script from the command line:
 
@@ -114,7 +164,7 @@ OUTPUT_FILENAME=my_custom_report
 
 ## Output
 
-The script generates output files in the `output/` directory:
+The scripts generate output files in the `output/` directory (relative to the script location, typically `scripts/fetch-secret-scanning/output/` or `scripts/output/fetch_secret_scanning/`):
 
 ### 1. Secret Scanning Report
 - **File:** `secret_scanning_report.csv` or `.xlsx`
@@ -160,30 +210,47 @@ When using Excel format, the file includes a "Summary" sheet with:
 
 ## Features
 
-### 1. GitHub App Authentication
-- Uses GitHub App installation tokens per organization
-- Automatic token refresh when expired
-- No need for multiple PATs
+### Common Features (Both Scripts)
 
-### 2. Organization Discovery
-- Automatically fetches all organizations in the enterprise
-- Uses GraphQL for efficient organization listing
-- Skips organizations where app is not installed
+1. **Organization Discovery**
+   - Automatically fetches all organizations in the enterprise (if enterprise slug provided)
+   - Can also read from organizations.csv file
+   - Skips organizations where authentication fails
 
-### 3. Rate Limiting Handling
-- Automatic rate limit detection
-- Exponential backoff on retries
-- Rate limit warnings when approaching limits
+2. **Rate Limiting Handling**
+   - Automatic rate limit detection
+   - Exponential backoff on retries
+   - Rate limit warnings when approaching limits
 
-### 4. Error Handling
-- Continues processing even if individual organizations fail
-- Detailed error logging
-- Summary of successful/failed organizations
+3. **Error Handling**
+   - Continues processing even if individual organizations fail
+   - Detailed error logging
+   - Summary of successful/failed organizations
 
-### 5. Data Enrichment
-- Parses organization names for Project_Code and Cost_Center
-- Extracts location and commit information
-- Optional commit author enrichment (disabled by default to save API calls)
+4. **Data Enrichment**
+   - Parses organization names for Project_Code and Cost_Center
+   - Extracts location and commit information
+   - Optional commit author enrichment (configurable via ENABLE_COMMIT_ENRICHMENT)
+
+### GitHub App Specific Features
+
+1. **GitHub App Authentication**
+   - Uses GitHub App installation tokens per organization
+   - Automatic token refresh when expired
+   - No need for multiple PATs
+
+2. **SSL Flexibility**
+   - Configurable SSL verification for corporate environments
+
+### PAT-based Specific Features
+
+1. **Multi-token Support**
+   - Can use multiple PATs for better rate limit handling
+   - Automatic token rotation
+
+2. **Simpler Setup**
+   - No need for GitHub App configuration
+   - Faster to get started
 
 ## Organization Name Format
 
@@ -197,50 +264,52 @@ Organizations not following this format will have:
 
 ## Troubleshooting
 
+### Common Issues
+
 ### 1. "No organizations found"
 - Check that `GH_ENTERPRISE_SLUG` is correct
-- Ensure `GITHUB_TOKEN` has enterprise read permissions
-- Verify the PAT has access to the enterprise
+- Ensure your token (PAT or GitHub App) has enterprise read permissions
+- Verify the PAT/token has access to the enterprise
 
-### 2. "Failed to authenticate for organization"
+### 2. "Failed to authenticate for organization" (GitHub App)
 - Ensure the GitHub App is installed in that organization
 - Check that the App has the required permissions
 - Verify `GH_APP_ID` and `GH_PRIVATE_KEY` are correct
 
-### 3. Rate Limiting Issues
-- The script handles rate limits automatically
+### 3. Authentication failures (PAT-based)
+- Verify `GH_PATS` environment variable is set correctly
+- Ensure the PAT has `repo` and `security_events` scopes
+- Check that the PAT hasn't expired
+
+### 4. Rate Limiting Issues
+- Both scripts handle rate limits automatically
 - If you have many organizations, expect longer execution times
 - Consider running during off-peak hours
+- For PAT-based script: Use multiple PATs in comma-separated format
 
-### 4. SSL Certificate Errors
+### 5. SSL Certificate Errors
 - Set `VERIFY_SSL=false` in corporate environments with self-signed certificates
 - Note: This reduces security, use only when necessary
 
-## Differences from PAT-based Version
+## Differences Between Scripts
 
-The GitHub App version differs from the PAT-based version in:
-
-1. **Authentication:**
-   - Uses GitHub App installation tokens instead of PATs
-   - Per-organization authentication instead of enterprise-wide
-
-2. **Organization Fetching:**
-   - Requires separate GraphQL query to list organizations
-   - Still needs a PAT for enterprise-level GraphQL queries
-
-3. **Alert Fetching:**
-   - Fetches alerts per organization instead of enterprise-wide
-   - More granular error handling per organization
-
-4. **Permissions:**
-   - App permissions are more granular and auditable
-   - Can be installed selectively per organization
+| Feature | PAT-based | GitHub App |
+|---------|-----------|------------|
+| Authentication | Personal Access Token | GitHub App installation tokens |
+| Setup Complexity | Simple | Requires App creation and installation |
+| Rate Limits | Standard PAT limits | Higher App limits |
+| Token Management | Manual rotation supported | Automatic refresh |
+| Security | Tied to user account | App-level permissions |
+| Auditability | User actions | App actions (better audit trail) |
+| Multi-org Support | Single PAT for all orgs | Per-org installation required |
 
 ## Performance Considerations
 
-- **Execution Time:** Proportional to the number of organizations
-- **API Calls:** ~1-5 calls per organization (depending on alert count)
-- **Rate Limits:** GitHub App has separate rate limits per installation
+- **Execution Time:** Proportional to the number of organizations and alerts
+- **API Calls:** ~1-10 calls per organization (depending on alert count and pagination)
+- **Rate Limits:** 
+  - PAT-based: Standard GitHub API rate limits (5,000 requests/hour)
+  - GitHub App: Separate rate limits per installation (typically higher)
 - **Memory:** Processes all alerts in memory before export
 
 For large enterprises (100+ organizations), expect execution times of 5-30 minutes depending on alert volumes.
@@ -356,3 +425,9 @@ For issues or questions:
 3. Ensure all environment variables are set correctly
 4. Check that the app is installed in target organizations
 5. **If getting 0 results**: Verify `SECRET_TYPES` is configured with your custom pattern names
+
+## GitHub Actions Integration
+
+This directory is automated by two workflows:
+- 'Fetch Secret Alerts (App)' (.github/workflows/fetch-secret-scanning-alerts.yml)
+- 'Fetch Secret Alerts (PAT)' (.github/workflows/fetch-secret-scanning-alerts-pat.yml)

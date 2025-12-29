@@ -14,7 +14,9 @@ This script processes secret scanning alerts from CSV files and **automatically 
 
 ## Prerequisites
 
-1. **GitHub Token**: Set either `GH_PATS` or `GITHUB_TOKEN` environment variable with a token that has `repo` and `security_events` scopes
+1. **GitHub Token**: Set either `GH_PATS` (comma-separated list) or `GITHUB_TOKEN` (single token) environment variable with a token that has `repo` and `security_events` scopes
+   - If using `GH_PATS`, the script will use the first token from the comma-separated list
+   - Both token formats are supported for compatibility with other scripts
 
 2. **Commit Enrichment Enabled**: Ensure that the `fetch_secret_scanning_alerts.py` script is configured to collect committer information:
    ```bash
@@ -23,7 +25,8 @@ This script processes secret scanning alerts from CSV files and **automatically 
 
 3. **Updated CSV Data**: Run the fetch script to generate CSV data with committer information:
    ```bash
-   python ../fetch_secret_scanning_alerts.py
+   cd scripts/fetch-secret-scanning
+   python fetch_secret_scanning_alerts.py
    ```
 
 ## Usage
@@ -31,18 +34,19 @@ This script processes secret scanning alerts from CSV files and **automatically 
 ### Basic Usage (Dry-run Mode)
 Preview assignments without making API calls:
 ```bash
-python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --dry-run
+cd scripts/assign_alerts
+python assign_alerts.py --csv-file ../fetch-secret-scanning/output/secret_scanning_20251219_163836.csv --dry-run
 ```
 
 ### Assign Alerts via GitHub API
 Actually assign alerts to committers:
 ```bash
-python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv
+python assign_alerts.py --csv-file ../fetch-secret-scanning/output/secret_scanning_20251219_163836.csv
 ```
 
 ### With Custom Output File
 ```bash
-python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --output custom_report.csv
+python assign_alerts.py --csv-file ../fetch-secret-scanning/output/secret_scanning_20251219_163836.csv --output custom_report.csv
 ```
 
 ## Command Line Arguments
@@ -208,26 +212,30 @@ The script includes built-in rate limiting (0.1s delay between requests). If you
 
 1. **Fetch Alerts with Commit Information:**
    ```bash
-   cd scripts
+   cd scripts/fetch-secret-scanning
    export ENABLE_COMMIT_ENRICHMENT=true
    python fetch_secret_scanning_alerts.py
    ```
 
 2. **Preview Assignments (Dry-run):**
    ```bash
-   cd scripts/assign_alerts
-   python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv --dry-run
+   cd ../assign_alerts
+   python assign_alerts.py --csv-file ../fetch-secret-scanning/output/secret_scanning_20251219_163836.csv --dry-run
    ```
 
 3. **Assign Alerts via API:**
    ```bash
-   python assign_alerts.py --csv-file ../output/fetch_secret_scanning/secret_scanning_20251219_163836.csv
+   python assign_alerts.py --csv-file ../fetch-secret-scanning/output/secret_scanning_20251219_163836.csv
    ```
 
 4. **Review Results:**
    - Check console output for success/failure statistics
    - Review the CSV report in `scripts/output/assign_alerts/`
    - Verify assignments in GitHub UI
+
+## GitHub Actions Integration
+
+This script is automated by the 'Assign Secret Alerts' workflow in .github/workflows/assign-secret-scanning-alerts.yml.
 
 ## API Documentation
 

@@ -13,23 +13,36 @@ This module provides reusable GitHub App authentication functionality for all sc
 
 ## Installation
 
+This module is part of the GHAS_Inventory project. Dependencies are specified in `requirements.txt`:
+
 ```bash
 cd scripts/github_auth
 pip install -r requirements.txt
 ```
 
+Or install from the project root:
+```bash
+pip install -r requirements.txt
+```
+
 ## Environment Variables
 
-Set these environment variables in your `.env` file or system environment:
+Set these environment variables in your `.env` file at the project root or system environment:
 
 ```bash
 # Required
-GH_APP_ID=your_GH_APP_ID
+GH_APP_ID=your_app_id_number
 GH_PRIVATE_KEY=path/to/your/private/key.pem
+# Or provide the actual private key content:
+# GH_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 
 # Optional
 VERIFY_SSL=true  # Set to false for corporate environments with SSL issues
 ```
+
+**Note**: The `GH_PRIVATE_KEY` can be either:
+- A file path to your private key (e.g., `./private-key.pem`)
+- The actual private key content (including BEGIN/END markers)
 
 ## Usage
 
@@ -157,9 +170,15 @@ github_auth/
 ├── __init__.py              # Module initialization
 ├── github_app_auth.py       # Main authentication class
 ├── requirements.txt         # Dependencies
-├── README.md               # This documentation
-└── example_usage.py        # Usage examples
+└── README.md                # This documentation
 ```
+
+## Scripts Using This Module
+
+This authentication module is used by:
+- `scripts/fetch-secret-scanning/fetch_secret_scanning_alerts_githubApp.py`
+- `scripts/ORG-Fetch-Packages/fetch-packages-org.py`
+- Any other script requiring GitHub App authentication
 
 ## Benefits over PAT
 

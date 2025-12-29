@@ -10,7 +10,36 @@ A Python tool for fetching and analyzing GitHub Enterprise secret scanning alert
 - **Detailed Analytics**: Includes summary statistics and validity analysis
 - **Rate Limit Handling**: Smart retry logic with exponential backoff
 - **Multi-token Support**: Uses multiple GitHub tokens in round-robin for better rate limits
-- **GitHub Actions Integration**: Automated scheduled runs with workflow dispatch
+- **GitHub Actions Automation**: Automated scheduled or manual runs for secret scanning, language, and package analysis, and alert assignment
+
+## GitHub Actions Workflows
+
+This repository includes several GitHub Actions workflows to automate inventory, analysis, and alert assignment tasks:
+
+### 1. Fetch Secret Alerts (App)
+- **Purpose:** Automates fetching secret scanning alerts using GitHub App or PAT authentication.
+- **How it works:** Can be triggered manually or scheduled. Accepts alert state and output format as inputs. Runs the main secret scanning fetch script and saves results to the output directory.
+- **When to use:** For regular, automated, or on-demand inventory of secret scanning alerts across your enterprise.
+
+### 2. Fetch Secret Alerts (PAT)
+- **Purpose:** Fetches secret scanning alerts using only Personal Access Tokens (PATs).
+- **How it works:** Supports manual and scheduled runs. Allows advanced options like commit enrichment, test mode, and custom secret types. Useful for environments where GitHub App is not set up.
+- **When to use:** If you prefer or require PAT-based authentication for secret scanning.
+
+### 3. Analyze Package Dependencies
+- **Purpose:** Analyzes package dependencies across all repositories in your enterprise.
+- **How it works:** Runs the package analysis script, which scans for package manager files (e.g., requirements.txt, package.json) and inventories dependencies. Can be triggered manually.
+- **When to use:** For software inventory, license compliance, and dependency risk analysis.
+
+### 4. Analyze Repository Languages
+- **Purpose:** Analyzes programming language usage across all repositories in your enterprise.
+- **How it works:** Runs the language analysis script, which uses the GitHub GraphQL API to collect language statistics. Can be triggered manually.
+- **When to use:** For technology stack reporting, modernization planning, or language risk analysis.
+
+### 5. Assign Secret Alerts
+- **Purpose:** Assigns secret scanning alerts to repository committers or specified users.
+- **How it works:** Takes a CSV of alerts (output from the fetch script), and assigns each alert via the GitHub API. Supports dry-run mode for previewing assignments.
+- **When to use:** To automate or preview the assignment of secret scanning alerts for remediation.
 
 ## Prerequisites
 
