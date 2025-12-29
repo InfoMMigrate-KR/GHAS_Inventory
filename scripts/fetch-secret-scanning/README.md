@@ -89,6 +89,19 @@ cd scripts/fetch-secret-scanning
 python fetch_secret_scanning_alerts_githubApp.py
 ```
 
+### Organization Selection
+
+By default, the script processes **all organizations** in the enterprise. However, you can limit processing to a custom list of organizations:
+
+**To use a custom list of organizations:**
+1. Create/upload an `organizations.csv` file to `scripts/input/assign_alerts/` folder
+2. The CSV should contain the list of organization names to process
+3. The script will automatically detect this file and process only those organizations
+
+**To process all organizations in the enterprise:**
+1. Ensure the `organizations.csv` file is **removed** from `scripts/input/assign_alerts/` folder
+2. The script will fetch and process all organizations from the enterprise
+
 ### Configuration Options
 
 You can configure the script behavior using environment variables:
