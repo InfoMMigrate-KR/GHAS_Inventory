@@ -356,7 +356,7 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Secret_Type": safe_get(alert, "secret_type_display_name"),
                 "Secret_Type_ID": safe_get(alert, "secret_type"),
                 "State": safe_get(alert, "state"),
-                "Assignee": safe_get(alert, "assignee", "login"),
+                "Assignee": _extract_assignee(alert),
                 "Created_At": safe_get(alert, "created_at"),
                 "Updated_At": safe_get(alert, "updated_at"),
                 "URL": safe_get(alert, "html_url"),
@@ -413,6 +413,29 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
         logging.warning(
             f"Encountered {errors} errors while extracting {processed} secret scanning alerts"
         )
+
+
+def _extract_assignee(alert: Dict) -> str:
+    """
+    Extract assignee from alert.
+    GitHub API uses 'assigned_to' field for secret scanning alerts.
+
+    Args:
+        alert: Secret scanning alert dictionary
+
+    Returns:
+        Assignee login or "None" if not assigned
+    """
+    try:
+        assigned_to = alert.get("assigned_to")
+        if assigned_to and isinstance(assigned_to, dict):
+            login = assigned_to.get("login")
+            if login:
+                return login
+        return "None"
+    except Exception as e:
+        logging.debug(f"Error extracting assignee for alert {alert.get('number')}: {e}")
+        return "None"
 
 
 def count_by_field(data: List[Dict], field: str, value: Any) -> int:
@@ -1709,6 +1732,7 @@ def process_single_organization(
 
             # Extract alert data immediately and append to CSV
             if org_alerts:
+
                 extracted_alerts = list(extract_secret_scanning_data(org_alerts))
                 if extracted_alerts:
                     append_alerts_to_csv(secret_csv, extracted_alerts)
