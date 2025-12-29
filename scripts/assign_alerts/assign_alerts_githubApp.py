@@ -73,6 +73,84 @@ def get_github_app_auth() -> GitHubAppAuth:
         sys.exit(1)
 
 
+def get_alert_details(
+    org: str,
+    repo: str,
+    alert_number: int,
+    auth: GitHubAppAuth,
+    max_retries: int = 3
+) -> Optional[Dict]:
+    """
+    Fetch details of a secret scanning alert including current assignee.
+    
+    Args:
+        org: Organization name
+        repo: Repository name
+        alert_number: Alert number
+        auth: GitHub App authentication handler
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Dictionary with alert details or None if failed
+    """
+    repo_full_name = f"{org}/{repo}"
+    
+    # Authenticate for the organization if not already authenticated
+    if not auth.access_token or auth.installation_id is None:
+        if not auth.authenticate_for_organization(org):
+            logging.error(f"Failed to authenticate for organization: {org}")
+            return None
+    
+    # Get authenticated session
+    session = auth.get_authenticated_session()
+    
+    url = f"https://api.github.com/repos/{repo_full_name}/secret-scanning/alerts/{alert_number}"
+    
+    for attempt in range(max_retries):
+        try:
+            response = session.get(url, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Extract assignee if present
+                assignee = data.get("assignee", {})
+                current_assignee = assignee.get("login", "") if assignee else ""
+                return {"current_assignee": current_assignee}
+            elif response.status_code == 404:
+                logging.warning(
+                    f"Alert #{alert_number} not found in {repo_full_name} (404)"
+                )
+                return None
+            elif response.status_code == 401:
+                # Token expired, try to re-authenticate
+                logging.warning(f"Authentication expired, re-authenticating for {org}")
+                if auth.authenticate_for_organization(org):
+                    session = auth.get_authenticated_session()
+                    continue
+                else:
+                    logging.error(f"Re-authentication failed for {org}")
+                    return None
+            else:
+                logging.warning(
+                    f"Unexpected status {response.status_code} for alert #{alert_number} in {repo_full_name}"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logging.error(
+                f"Request failed for alert #{alert_number} in {repo_full_name}: {e}"
+            )
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return None
+    
+    return None
+
+
 def assign_alert_to_user(
     org: str,
     repo: str,
@@ -240,6 +318,11 @@ def generate_assignment_summary(df: pd.DataFrame) -> Dict:
         repositories = group["Repository_Name"].unique().tolist()
         secret_types = group["Secret_Type"].unique().tolist()
         open_alerts = len(group[group["State"] == "open"])
+        
+        # Include Organization_Name in the alerts data
+        columns_to_include = ["Alert_Number", "Repository_Name", "Secret_Type", "State", "URL"]
+        if "Organization_Name" in group.columns:
+            columns_to_include.insert(0, "Organization_Name")
 
         summary[committer] = {
             "total_alerts": alert_count,
@@ -247,9 +330,7 @@ def generate_assignment_summary(df: pd.DataFrame) -> Dict:
             "resolved_alerts": alert_count - open_alerts,
             "repositories": repositories,
             "secret_types": secret_types,
-            "alerts": group[
-                ["Alert_Number", "Repository_Name", "Secret_Type", "State", "URL"]
-            ].to_dict("records"),
+            "alerts": group[columns_to_include].to_dict("records"),
         }
 
     return summary
@@ -299,13 +380,22 @@ def print_assignment_summary(summary: Dict):
                 )
 
 
-def save_assignment_report(summary: Dict, output_file: str):
+def save_assignment_report(
+    summary: Dict, 
+    output_file: str, 
+    dry_run: bool = True,
+    assignment_results: Optional[List[Dict]] = None,
+    current_assignees: Optional[Dict] = None
+):
     """
     Save assignment summary to a CSV file.
 
     Args:
         summary: Assignment summary dictionary
         output_file: Path to output CSV file
+        dry_run: True if this is a dry-run report, False for post-run report
+        assignment_results: List of assignment results (for post-run)
+        current_assignees: Dictionary mapping (org, repo, alert_num) to current assignee (for dry-run)
     """
     try:
         # Flatten the summary data for CSV export
@@ -313,18 +403,38 @@ def save_assignment_report(summary: Dict, output_file: str):
 
         for committer, data in summary.items():
             for alert in data["alerts"]:
-                csv_data.append(
-                    {
-                        "Assignee": committer,
-                        "Alert_Number": alert["Alert_Number"],
-                        "Repository_Name": alert["Repository_Name"],
-                        "Secret_Type": alert["Secret_Type"],
-                        "State": alert["State"],
-                        "URL": alert["URL"],
-                        "Total_Alerts_For_Assignee": data["total_alerts"],
-                        "Open_Alerts_For_Assignee": data["open_alerts"],
-                    }
-                )
+                row = {
+                    "Assignee": committer,
+                    "Alert_Number": alert["Alert_Number"],
+                    "Repository_Name": alert["Repository_Name"],
+                    "Secret_Type": alert["Secret_Type"],
+                    "State": alert["State"],
+                    "URL": alert["URL"],
+                    "Total_Alerts_For_Assignee": data["total_alerts"],
+                    "Open_Alerts_For_Assignee": data["open_alerts"],
+                }
+                
+                # Add mode-specific columns
+                if dry_run:
+                    # For dry-run: add currently_assigned_to column
+                    key = (alert.get("Organization_Name", ""), alert["Repository_Name"], alert["Alert_Number"])
+                    current_assignee = ""
+                    if current_assignees and key in current_assignees:
+                        current_assignee = current_assignees[key]
+                    row["Currently_Assigned_To"] = current_assignee
+                else:
+                    # For post-run: add successful_assignment column
+                    successful = False
+                    if assignment_results:
+                        # Find the result for this alert
+                        for result in assignment_results:
+                            if (result["alert"] == alert["Alert_Number"] and 
+                                result["repo"] == alert["Repository_Name"]):
+                                successful = result["success"]
+                                break
+                    row["Successful_Assignment"] = successful
+                
+                csv_data.append(row)
 
         df = pd.DataFrame(csv_data)
         df.to_csv(output_file, index=False)
@@ -375,8 +485,42 @@ def main():
     # Generate assignment summary
     summary = generate_assignment_summary(filtered_df)
     
-    # If not dry-run, attempt to assign alerts via API
-    if not args.dry_run:
+    assignment_results = None
+    current_assignees = None
+    
+    # If dry-run, fetch current assignees
+    if args.dry_run:
+        logging.info("Dry-run mode: Fetching current assignees...")
+        auth = get_github_app_auth()
+        current_assignees = {}
+        current_org = None
+        
+        for _, row in filtered_df.iterrows():
+            org = row["Organization_Name"]
+            repo = row["Repository_Name"]
+            alert_num = row["Alert_Number"]
+            
+            # Re-authenticate if we're processing a new organization
+            if org != current_org:
+                logging.info(f"Authenticating for organization: {org}")
+                if not auth.authenticate_for_organization(org):
+                    logging.error(f"Failed to authenticate for organization: {org}. Skipping alerts.")
+                    current_assignees[(org, repo, alert_num)] = ""
+                    continue
+                current_org = org
+            
+            details = get_alert_details(org, repo, alert_num, auth)
+            if details:
+                current_assignees[(org, repo, alert_num)] = details.get("current_assignee", "")
+            else:
+                current_assignees[(org, repo, alert_num)] = ""
+            
+            # Rate limiting: be nice to the API
+            time.sleep(0.1)
+        
+        logging.info(f"Fetched current assignees for {len(current_assignees)} alerts")
+    else:
+        # If not dry-run, attempt to assign alerts via API
         logging.info("Attempting to assign alerts via GitHub API (using GitHub App)...")
         auth = get_github_app_auth()
         
@@ -426,12 +570,25 @@ def main():
 
     # Save report if output file specified
     if args.output:
-        save_assignment_report(summary, args.output)
+        save_assignment_report(
+            summary, 
+            args.output, 
+            dry_run=args.dry_run,
+            assignment_results=assignment_results,
+            current_assignees=current_assignees
+        )
     else:
         # Generate default output filename in the output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_output = os.path.join(output_dir, f"alert_assignments_{timestamp}.csv")
-        save_assignment_report(summary, default_output)
+        mode_prefix = "dry_run" if args.dry_run else "post_run"
+        default_output = os.path.join(output_dir, f"alert_assignments_{mode_prefix}_{timestamp}.csv")
+        save_assignment_report(
+            summary, 
+            default_output,
+            dry_run=args.dry_run,
+            assignment_results=assignment_results,
+            current_assignees=current_assignees
+        )
 
     # Show next steps
     print("\n" + "=" * 80)
@@ -439,9 +596,10 @@ def main():
     print("=" * 80)
     if args.dry_run:
         print("1. Review the assignment summary above")
-        print("2. Run without --dry-run to assign alerts via GitHub API")
-        print("3. Or manually assign alerts using the committer GitHub handles from the CSV")
-        print("\nNote: Currently in dry-run mode. No API calls were made.")
+        print("2. Check the dry-run CSV report for current assignees")
+        print("3. Run without --dry-run to assign alerts via GitHub API")
+        print("4. Or manually assign alerts using the committer GitHub handles from the CSV")
+        print("\nNote: Currently in dry-run mode. Assignments were not made.")
     else:
         successful = sum(1 for r in assignment_results if r["success"])
         failed = len(assignment_results) - successful
@@ -451,7 +609,7 @@ def main():
         if failed > 0:
             print(f"✗ Failed to assign {failed} alert(s)")
             print("  Check the logs above for details on failed assignments")
-        print("\nReview the generated CSV file for complete assignment details.")
+        print("\nReview the post-run CSV file for assignment results (Successful_Assignment column).")
 
 
 if __name__ == "__main__":
