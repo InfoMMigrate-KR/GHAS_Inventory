@@ -356,6 +356,7 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Secret_Type": safe_get(alert, "secret_type_display_name"),
                 "Secret_Type_ID": safe_get(alert, "secret_type"),
                 "State": safe_get(alert, "state"),
+                "Assignee": safe_get(alert, "assignee", "login"),
                 "Created_At": safe_get(alert, "created_at"),
                 "Updated_At": safe_get(alert, "updated_at"),
                 "URL": safe_get(alert, "html_url"),
@@ -1441,6 +1442,66 @@ def export_to_excel(
         return False
 
 
+def create_secret_scanning_csv(timestamp: str) -> str:
+    """
+    Create the secret scanning CSV file with headers.
+
+    Args:
+        timestamp: Timestamp string for filename
+
+    Returns:
+        str: Path to the created CSV file
+    """
+    try:
+        csv_file = os.path.join(output_dir, f"secret_scanning_{timestamp}.csv")
+        # Define all column headers including commit enrichment columns
+        headers = [
+            "Alert_Number",
+            "Organization_Name",
+            "Repository_Name",
+            "Project_Code",
+            "Cost_Center",
+            "Secret_Type",
+            "Secret_Type_ID",
+            "State",
+            "Assignee",
+            "Created_At",
+            "Updated_At",
+            "URL",
+            "Validity",
+            "Resolution",
+            "Resolved_By",
+            "Resolved_At",
+            "Publicly_Leaked",
+            "Push_Protection_Bypassed",
+            "Location_Path",
+            "Location_Start_Line",
+            "Location_End_Line",
+            "Location_Start_Column",
+            "Location_End_Column",
+            "Location_Blob_Sha",
+            "Location_Blob_URL",
+            "Locations_URL",
+            "Has_More_Locations",
+            "Commit_Author",
+            "Commit_Committer",
+            "Commit_SHA",
+            "Commit_Attribution_Method",
+            "Repo_Admin",
+        ]
+        # Create file with headers
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
+            import csv
+
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+        logging.info(f"Created secret scanning CSV: {csv_file}")
+        return csv_file
+    except Exception as e:
+        logging.error(f"Error creating secret scanning CSV: {e}")
+        return None
+
+
 def create_org_access_issues_csv(timestamp: str) -> str:
     """
     Create the org access issues CSV file with headers.
@@ -1461,6 +1522,40 @@ def create_org_access_issues_csv(timestamp: str) -> str:
     except Exception as e:
         logging.error(f"Error creating org access issues CSV: {e}")
         return None
+
+
+def append_alerts_to_csv(csv_file: str, alerts: List[Dict]) -> bool:
+    """
+    Append alerts to the secret scanning CSV file immediately (without commit enrichment).
+
+    Args:
+        csv_file: Path to the CSV file
+        alerts: List of alert dictionaries to append
+
+    Returns:
+        bool: True if successfully appended
+    """
+    import csv
+
+    try:
+        if csv_file and os.path.exists(csv_file):
+            with open(csv_file, "a", newline="", encoding="utf-8") as f:
+                # Get fieldnames from the CSV file
+                with open(csv_file, "r", newline="", encoding="utf-8") as header_file:
+                    reader = csv.DictReader(header_file)
+                    fieldnames = reader.fieldnames
+
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                for alert in alerts:
+                    # Remove the temporary first_location_detected field before writing
+                    write_alert = alert.copy()
+                    write_alert.pop("first_location_detected", None)
+                    writer.writerow(write_alert)
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error appending alerts to CSV: {e}")
+        return False
 
 
 def append_org_access_issue(csv_file: str, org_name: str, comment: str) -> bool:
@@ -1564,10 +1659,12 @@ def process_single_organization(
     params: Dict,
     base_api_url: str,
     org_issues_csv: str,
+    secret_csv: str,
     metrics: PerformanceMetrics,
 ) -> Tuple[List[Dict], bool]:
     """
     Process alerts for a single organization.
+    Fetches alerts and immediately writes them to CSV (without commit details).
 
     Returns:
         tuple: (list of alerts, success flag)
@@ -1610,6 +1707,15 @@ def process_single_organization(
             if metrics:
                 metrics.total_alerts += len(org_alerts)
 
+            # Extract alert data immediately and append to CSV
+            if org_alerts:
+                extracted_alerts = list(extract_secret_scanning_data(org_alerts))
+                if extracted_alerts:
+                    append_alerts_to_csv(secret_csv, extracted_alerts)
+                    logging.info(
+                        f"  [CSV] Appended {len(extracted_alerts)} alerts to CSV"
+                    )
+
             return org_alerts, True
 
         except Exception as e:
@@ -1631,10 +1737,12 @@ def process_organizations_concurrently(
     params: Dict,
     base_api_url: str,
     org_issues_csv: str,
+    secret_csv: str,
     metrics: PerformanceMetrics,
 ) -> Tuple[List[Dict], int, int]:
     """
     Process organizations concurrently for better performance.
+    Alerts are written to CSV immediately as they are fetched.
 
     Returns:
         tuple: (all_alerts, successful_orgs, failed_orgs)
@@ -1656,6 +1764,7 @@ def process_organizations_concurrently(
                 params,
                 base_api_url,
                 org_issues_csv,
+                secret_csv,
                 metrics,
             ): org_name
             for idx, org_name in enumerate(organizations, 1)
@@ -1684,11 +1793,91 @@ def process_organizations_concurrently(
     return all_alerts, successful_orgs, failed_orgs
 
 
+def enrich_csv_with_commit_details(
+    secret_csv: str,
+    all_alerts: List[Dict],
+    github_app_auth: GitHubAppAuth,
+    metrics: PerformanceMetrics,
+) -> bool:
+    """
+    Read the CSV file and enrich it with commit details.
+    Updates the CSV file in place.
+    """
+    import csv
+
+    stage_start = time.time()
+
+    try:
+        logging.info("Reading CSV file for commit enrichment...")
+
+        # Read the existing CSV data
+        with open(secret_csv, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            csv_data = list(reader)
+            fieldnames = reader.fieldnames
+
+        if not csv_data:
+            logging.warning("No data in CSV to enrich")
+            return True
+
+        logging.info(f"Enriching {len(csv_data)} alerts with commit details...")
+
+        # Group alerts by organization for efficient session management
+        alerts_by_org = defaultdict(list)
+        for idx, alert in enumerate(csv_data):
+            org_name = alert.get("Organization_Name")
+            if org_name:
+                alerts_by_org[org_name].append((idx, alert))
+
+        # Process each organization's alerts with concurrent processing
+        with ThreadPoolExecutor(
+            max_workers=min(MAX_CONCURRENT_ORGS, len(alerts_by_org))
+        ) as executor:
+            futures = []
+
+            for org_name, org_alerts in alerts_by_org.items():
+                future = executor.submit(
+                    enrich_organization_alerts_from_csv,
+                    org_name,
+                    org_alerts,
+                    github_app_auth,
+                    csv_data,
+                    all_alerts,
+                )
+                futures.append(future)
+
+            # Wait for all enrichment tasks to complete
+            for future in as_completed(futures):
+                try:
+                    future.result()  # This will raise any exceptions
+                except Exception as e:
+                    logging.error(f"Error in commit enrichment: {e}")
+
+        # Write the enriched data back to CSV
+        logging.info("Writing enriched data back to CSV...")
+        with open(secret_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_data)
+
+        logging.info("Commit enrichment completed successfully")
+
+        if metrics:
+            metrics.processing_times["commit_enrichment"] = time.time() - stage_start
+
+        return True
+
+    except Exception as e:
+        logging.error(f"Error enriching CSV with commit details: {e}")
+        return False
+
+
 def extract_and_enrich_data(
     all_alerts: List[Dict], github_app_auth: GitHubAppAuth, metrics: PerformanceMetrics
 ) -> List[Dict]:
     """
     Extract and optionally enrich alert data with commit information.
+    NOTE: This function is now deprecated in favor of the new CSV-first approach.
     """
     stage_start = time.time()
     logging.info("Processing secret scanning alert data...")
@@ -1738,6 +1927,123 @@ def extract_and_enrich_data(
         )
 
     return secret_scanning_data
+
+
+def enrich_organization_alerts_from_csv(
+    org_name: str,
+    org_alerts: List[Tuple[int, Dict]],
+    github_app_auth: GitHubAppAuth,
+    csv_data: List[Dict],
+    all_alerts: List[Dict],
+) -> None:
+    """
+    Enrich alerts for a single organization with commit information from CSV data.
+    Updates csv_data in place.
+    """
+    logging.info(f"Enriching {len(org_alerts)} alerts for {org_name}...")
+
+    try:
+        # Authenticate for this organization
+        if github_app_auth.authenticate_for_organization(org_name):
+            session = github_app_auth.get_authenticated_session()
+
+            # Cache repository admins to avoid repeated API calls for the same repo
+            repo_admin_cache = {}
+
+            # Enrich alerts for this org
+            for idx, csv_alert in org_alerts:
+                try:
+                    repo_full_name = f"{csv_alert.get('Organization_Name')}/{csv_alert.get('Repository_Name')}"
+
+                    # Find the corresponding raw alert to get first_location_detected
+                    alert_number = csv_alert.get("Alert_Number")
+                    raw_alert = None
+                    for raw in all_alerts:
+                        if str(safe_get(raw, "number")) == str(alert_number):
+                            raw_alert = raw
+                            break
+
+                    # Build alert dict with first_location_detected for commit lookup
+                    alert_for_commit = {
+                        "Organization_Name": csv_alert.get("Organization_Name"),
+                        "Repository_Name": csv_alert.get("Repository_Name"),
+                        "Alert_Number": alert_number,
+                        "Has_More_Locations": csv_alert.get(
+                            "Has_More_Locations", "False"
+                        )
+                        == "True",
+                        "Locations_URL": csv_alert.get("Locations_URL"),
+                        "Location_Blob_Sha": csv_alert.get("Location_Blob_Sha"),
+                        "first_location_detected": (
+                            raw_alert.get("first_location_detected")
+                            if raw_alert
+                            else None
+                        ),
+                    }
+
+                    # Enrich with commit information using improved logic
+                    if repo_full_name:
+                        commit_info = get_best_commit_author(alert_for_commit, session)
+                        csv_data[idx]["Commit_Author"] = commit_info.get("author") or ""
+                        csv_data[idx]["Commit_Committer"] = (
+                            commit_info.get("committer") or ""
+                        )
+                        csv_data[idx]["Commit_SHA"] = commit_info.get("sha") or ""
+                        csv_data[idx]["Commit_Attribution_Method"] = (
+                            commit_info.get("method") or ""
+                        )
+
+                    # Enrich with repository admin information (always enabled)
+                    if repo_full_name:
+                        # Check cache first
+                        if repo_full_name not in repo_admin_cache:
+                            repo_admins = fetch_repository_admins(
+                                repo_full_name, session
+                            )
+                            repo_admin_cache[repo_full_name] = (
+                                ", ".join(repo_admins) if repo_admins else ""
+                            )
+
+                        csv_data[idx]["Repo_Admin"] = repo_admin_cache[repo_full_name]
+
+                except Exception as e:
+                    logging.warning(f"Failed to enrich alert {idx}: {e}")
+                    # Ensure the columns exist even if enrichment fails
+                    csv_data[idx]["Commit_Author"] = csv_data[idx].get(
+                        "Commit_Author", ""
+                    )
+                    csv_data[idx]["Commit_Committer"] = csv_data[idx].get(
+                        "Commit_Committer", ""
+                    )
+                    csv_data[idx]["Commit_SHA"] = csv_data[idx].get("Commit_SHA", "")
+                    csv_data[idx]["Commit_Attribution_Method"] = csv_data[idx].get(
+                        "Commit_Attribution_Method", ""
+                    )
+                    csv_data[idx]["Repo_Admin"] = csv_data[idx].get("Repo_Admin", "")
+        else:
+            logging.warning(
+                f"Could not authenticate for {org_name} - skipping enrichment"
+            )
+            # Add empty enrichment columns for this org's alerts
+            for idx, _ in org_alerts:
+                csv_data[idx]["Commit_Author"] = ""
+                csv_data[idx]["Commit_Committer"] = ""
+                csv_data[idx]["Commit_SHA"] = ""
+                csv_data[idx]["Commit_Attribution_Method"] = ""
+                csv_data[idx]["Repo_Admin"] = ""
+    except Exception as e:
+        logging.error(f"Error enriching alerts for {org_name}: {e}")
+        # Add empty enrichment columns for this org's alerts
+        for idx, _ in org_alerts:
+            csv_data[idx]["Commit_Author"] = csv_data[idx].get("Commit_Author", "")
+            csv_data[idx]["Commit_Committer"] = csv_data[idx].get(
+                "Commit_Committer", ""
+            )
+            csv_data[idx]["Commit_SHA"] = csv_data[idx].get("Commit_SHA", "")
+            csv_data[idx]["Commit_Attribution_Method"] = csv_data[idx].get(
+                "Commit_Attribution_Method", ""
+            )
+            csv_data[idx]["Repo_Admin"] = csv_data[idx].get("Repo_Admin", "")
 
 
 def enrich_organization_alerts(
@@ -1948,10 +2254,16 @@ def main():
         # Generate timestamp for this query execution
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Create org access issues CSV file upfront
+        # Create CSV files upfront
         org_issues_csv = create_org_access_issues_csv(timestamp)
+        secret_csv = create_secret_scanning_csv(timestamp)
+
+        if not secret_csv:
+            logging.error("Failed to create secret scanning CSV file. Exiting.")
+            return 1
 
         # Process organizations concurrently
+        # Alerts will be written to CSV immediately as they are fetched
         stage_start = time.time()
         all_secret_scanning_alerts, successful_orgs, failed_orgs = (
             process_organizations_concurrently(
@@ -1960,6 +2272,7 @@ def main():
                 params,
                 base_api_url,
                 org_issues_csv,
+                secret_csv,
                 metrics,
             )
         )
@@ -1973,10 +2286,23 @@ def main():
         logging.info(f"  - Total Alerts Fetched: {len(all_secret_scanning_alerts)}")
         logging.info("=" * 80)
 
-        # Extract and enrich data
-        secret_scanning_data = extract_and_enrich_data(
-            all_secret_scanning_alerts, github_app_auth, metrics
+        # Enrich CSV with commit details
+        logging.info("Starting commit enrichment phase...")
+        enrich_success = enrich_csv_with_commit_details(
+            secret_csv, all_secret_scanning_alerts, github_app_auth, metrics
         )
+
+        if not enrich_success:
+            logging.warning(
+                "Commit enrichment failed, but CSV with basic data is available"
+            )
+
+        # Read the final CSV to get the count for summary
+        import csv
+
+        with open(secret_csv, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            secret_scanning_data = list(reader)
 
         # Create summary data with query metadata
         summary_data = create_summary_data(
@@ -1989,17 +2315,29 @@ def main():
         logging.info("=" * 80)
         logging.info("Data Processing Complete:")
         logging.info(f"  - Secret Scanning: {len(secret_scanning_data)} alerts")
+        logging.info(f"  - CSV File: {secret_csv}")
         logging.info("=" * 80)
 
-        # Export results
-        export_success = export_results(
-            summary_data,
-            secret_scanning_data,
-            config,
-            timestamp,
-            org_issues_csv,
-            metrics,
-        )
+        # Export results (for Excel if requested)
+        export_success = True
+        if config["format"] in ["xlsx", "both"]:
+            output_filename = os.path.join(output_dir, f"{config['output']}.xlsx")
+            logging.info(f"Attempting to export to {output_filename}...")
+            excel_success = export_to_excel(
+                summary_data, secret_scanning_data, output_filename
+            )
+            export_success = excel_success
+
+        # Report organization access issues
+        if org_issues_csv and os.path.exists(org_issues_csv):
+            with open(org_issues_csv, "r") as f:
+                issue_count = sum(1 for line in f) - 1
+            if issue_count > 0:
+                logging.info(
+                    f"Organization access issues logged to: {org_issues_csv} ({issue_count} organizations)"
+                )
+            else:
+                logging.info("No organization access issues encountered")
 
         # Get final memory statistics
         current, peak = tracemalloc.get_traced_memory()

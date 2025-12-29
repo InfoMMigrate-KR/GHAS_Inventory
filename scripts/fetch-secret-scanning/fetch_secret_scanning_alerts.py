@@ -347,6 +347,11 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
             safe_get(alert, "secret_type")
         ),
         "State": ("state",),
+        "Assignee": lambda alert: (
+            safe_get(alert, "assignee", "login")
+            if safe_get(alert, "assignee")
+            else None
+        ),
         "Created_At": ("created_at",),
         "Updated_At": ("updated_at",),
         "URL": ("html_url",),
