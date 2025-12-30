@@ -795,18 +795,7 @@ For issues or questions:
 4. Open an issue in this repository
 
 ---
-
-## 📜 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Development Setup
+## Development Setup
 
 ```bash
 # Clone the repository
