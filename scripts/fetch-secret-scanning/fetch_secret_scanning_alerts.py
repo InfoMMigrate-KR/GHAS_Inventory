@@ -314,6 +314,29 @@ def parse_organization_name(org_name: str) -> Tuple[str, str]:
         return "NO PROJECT CODE", "NO COST CENTER"
 
 
+def _extract_assignee(alert: Dict) -> str:
+    """
+    Extract assignee from alert.
+    GitHub API uses 'assigned_to' field for secret scanning alerts.
+
+    Args:
+        alert: Secret scanning alert dictionary
+
+    Returns:
+        Assignee login or "None" if not assigned
+    """
+    try:
+        assigned_to = alert.get("assigned_to")
+        if assigned_to and isinstance(assigned_to, dict):
+            login = assigned_to.get("login")
+            if login:
+                return login
+        return "None"
+    except Exception as e:
+        logging.debug(f"Error extracting assignee for alert {alert.get('number')}: {e}")
+        return "None"
+
+
 def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
     """
     Extract relevant fields from secret scanning alerts.
@@ -347,6 +370,7 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> List[Dict]:
             safe_get(alert, "secret_type")
         ),
         "State": ("state",),
+        "Assignee": lambda alert: _extract_assignee(alert),
         "Created_At": ("created_at",),
         "Updated_At": ("updated_at",),
         "URL": ("html_url",),

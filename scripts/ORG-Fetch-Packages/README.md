@@ -1,8 +1,14 @@
 # GitHub Organization Package Fetcher
 
-A Python utility to fetch and analyze package details from GitHub organizations and their repositories.
+A Python utility to fetch and analyze package dependencies from GitHub organizations and their repositories.
 
 ## Overview
+
+This script fetches package manager files (package.json, requirements.txt, pom.xml, etc.) from all repositories in specified GitHub organizations and extracts dependency information. It helps with:
+- Software inventory management
+- License compliance tracking
+- Dependency auditing across multiple organizations
+- Technology stack analysis
 
 ## Features
 
@@ -69,35 +75,54 @@ Before using this tool, you need to create and configure a GitHub App:
 
 ## Configuration
 
-1. Create a `.env` file with the following variables:
+1. Create a `.env` file in the project root (not in the ORG-Fetch-Packages directory) with the following variables:
 ```properties
 # GitHub App Configuration
-GH_APP_ID="your_GH_APP_ID"
-GH_PRIVATE_KEY="path/to/your/private-key.pem"
+GH_APP_ID=your_app_id_number
+GH_PRIVATE_KEY=path/to/your/private-key.pem
+# Or provide the actual private key content
 
 # SSL Verification (set to false for corporate environments with self-signed certs)
 VERIFY_SSL=true
-
-# Input/Output Configuration
-INPUT_CSV_PATH=organizations.csv
-REPORTS_DIR=reports
 ```
 
-2. Create an `organizations.csv` file with organization names:
-```csv
-org1,org2,org3
-```
+2. Prepare an input CSV file with organization names. The script looks for:
+   - `scripts/output/organizations.csv` (default location)
+   - Or a custom path specified in the script
+
+   The CSV should contain organization names (one per line or comma-separated):
+   ```csv
+   org1,org2,org3
+   ```
+   
+   Or in column format:
+   ```csv
+   organization_name
+   org1
+   org2
+   org3
+   ```
 
 ## Usage
 
-Run the script:
+Run the script from the command line:
+
 ```bash
+cd scripts/ORG-Fetch-Packages
 python fetch-packages-org.py
 ```
 
+The script will:
+1. Read organization names from the CSV file
+2. Authenticate using GitHub App credentials
+3. Fetch all repositories for each organization
+4. Scan repositories for package manager files
+5. Extract dependency information
+6. Generate CSV reports in the output directory
+
 ## Output
 
-The script generates CSV files in the `reports` directory for each processed organization. Each output file follows the naming pattern: `github_dependencies_{organization_name}_{timestamp}.csv`.
+The script generates CSV files in the output directory. The default output location varies but is typically in a `reports` or `output` subdirectory. Each output file follows the naming pattern: `github_dependencies_{organization_name}_{timestamp}.csv`.
 
 ### Output File Structure
 
@@ -107,11 +132,15 @@ The CSV file contains the following columns:
 - **repo_name**: Name of the repository
 - **package_name**: Name of the package file (e.g., package.json, requirements.txt)
 - **dependency_name**: Name of the dependency
-- **is_open_source**: Boolean indicating if dependency has open source license
+- **is_open_source**: Boolean indicating if dependency has open source license (when license checking is enabled)
 
-### Sample CSV Output
+### Sample Output
 
-![alt text](image.png)
+The output shows all dependencies found across repositories in the organization, making it easy to:
+- Track dependencies across your codebase
+- Identify common libraries used
+- Audit license compliance
+- Generate software bills of materials (SBOM)
 
 ### Supported Package Types
 
@@ -135,33 +164,33 @@ The script automatically detects and parses the following package manager files:
    - Complete dependency mapping per repository
 
 2. **Package Manager Detection**
-   - Automatic detection of package manager files across 13+ languages
+   - Automatic detection of package manager files across 10+ languages
    - Precise identification of package file types
-   - Support for both production and development dependencies
+   - Support for both production and development dependencies (where applicable)
 
 3. **Dependency Analysis**
    - Complete list of all dependencies found in each repository
-   - License compliance checking for open source validation
+   - License compliance checking for open source validation (when configured)
    - Clean dependency names for easy analysis and reporting
 
-4. **Compliance Tracking**
-   - Built-in license checking against public package registries
-   - Open source compliance indicators for each dependency
-   - Support for multiple package registry APIs (PyPI, NPM, Maven, etc.)
+4. **Technology Stack Insights**
+   - Identify which languages and frameworks are used
+   - Track technology adoption across organizations
+   - Support inventory and modernization planning
 
 ### Use Cases
 
 This CSV output is particularly useful for:
 - **Dependency Auditing**: Track all dependencies across your organization
-- **License Compliance**: Identify potentially problematic licenses
+- **License Compliance**: Identify potentially problematic licenses (when configured)
 - **Security Analysis**: Feed data into security scanning tools
 - **Inventory Management**: Maintain a complete software inventory
-- **Cost Analysis**: Understand technology stack distribution
+- **Technology Analysis**: Understand technology stack distribution
+- **Modernization Planning**: Identify outdated dependencies
 
 ### Output Location
 
-- Default: `./reports/github_dependencies_{org_name}_{timestamp}.csv`
-- Configurable via `REPORTS_DIR` environment variable
+- Generated in the script's output/reports directory
 - Timestamp format: `YYYYMMDD_HHMMSS`
 - One CSV file per organization with all dependencies listed
 
@@ -252,12 +281,12 @@ The script provides comprehensive logging and progress tracking:
 ### Console Output Example:
 ```
 Fetching package details for organization: example-org
+Setting installation ID for organization: example-org
 Found 15 repositories
 Processing repository 1/15: web-app
 Processing repository 2/15: api-service
 Processing repository 3/15: mobile-app
 ...
-Fetching GitHub Packages...
 Time taken: 45.32 seconds
 Package dependencies saved to: ./reports/github_dependencies_example-org_20250729_100000.csv
 
@@ -265,13 +294,22 @@ Generated report files:
 - ./reports/github_dependencies_example-org_20250729_100000.csv
 ```
 
+## Related Scripts
+
+This script uses the GitHub App authentication module located at:
+- `scripts/github_auth/github_app_auth.py`
+
+For generating the organizations CSV file, see:
+- `scripts/fetch_Orgs/fetch_orgs.py`
+
 ## Support and Maintenance
 
 For issues or enhancements:
 1. Check the troubleshooting guide above
 2. Verify configuration and permissions
-3. Review logs for specific error messages
-4. Submit detailed bug reports including:
-   - Error messages
-   - Configuration details
-   - Organization size and context
+3. Review console output for specific error messages
+4. Ensure GitHub App is properly installed and configured
+
+## GitHub Actions Integration
+
+This script is automated by the 'Analyze Package Dependencies' workflow in .github/workflows/fetch-packages-analysis.yml.

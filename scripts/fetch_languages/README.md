@@ -4,31 +4,29 @@ A Python tool for analyzing programming languages used across all repositories i
 
 ## Features
 
-
 - **Enterprise-wide Coverage**: Automatically discovers and analyzes all organizations and repositories
+- **GraphQL API**: Uses GitHub's GraphQL API for efficient data retrieval
 - **Comprehensive Analysis**: 
   - Language distribution by repository
   - Byte counts and percentages for each language
   - Primary language identification
-  - Language colors and metadata
 - **Rich Reporting**: 
   - Detailed repository-language breakdowns
   - Aggregated language statistics
-  - Multiple output formats (Excel, CSV)
+  - Multiple output formats (CSV)
 - **Robust Error Handling**: Retry logic, multi-token support, comprehensive logging, and error CSV with details
 - **Smart Parsing**: Extracts project codes and cost centers from organization names
 - **Progressive CSV Writing**: Language and error CSV files are written incrementally as each organization is processed
-- **Detailed Logging & Timing**: All operations and errors are logged to a timestamped log file in `scripts/fetch_languages/output/logs/`, with a timing report CSV for per-organization analytics
-- **Execution Summary**: At the end, the script logs total execution time, success/failure counts, average/fastest/slowest org times, and processing rate
+- **Detailed Logging**: All operations and errors are logged with timestamps
+- **Execution Summary**: At the end, the script logs total execution time and success/failure counts
 
 ## Prerequisites
 
 - Python 3.9+
-- GitHub App with appropriate permissions installed on your Enterprise:
+- GitHub Personal Access Token (PAT) with appropriate permissions:
   - `read:org` - Read organization data
   - `repo` - Read repository data (for private repos)
-  - `read:enterprise` - Read enterprise data
-  - App must be installed on organizations within the enterprise
+  - `read:enterprise` - Read enterprise data (if querying enterprise-level data)
 
 ## Setup
 
@@ -61,77 +59,53 @@ Edit `.env` with your configuration:
 # Required: Your GitHub Enterprise slug
 GH_ENTERPRISE_SLUG=your-enterprise-slug
 
-# Required: GitHub App credentials
-GH_APP_ID=123456
-GH_PRIVATE_KEY=path/to/your/private-key.pem
+# Required: GitHub Personal Access Token(s)
+# Can use a single token or comma-separated list for rotation
+GH_PATS=ghp_your_token_here
+# Or multiple tokens for better rate limiting
+GH_PATS=ghp_token1,ghp_token2,ghp_token3
 
-# Optional: Default organization for authentication (recommended for enterprise queries)
-GITHUB_DEFAULT_ORG=your-default-org-name
-
-# Optional: Output format (default: excel)
-OUTPUT_FORMAT=excel  # Options: excel, csv
+# Optional: Output format (currently only CSV is implemented in the script)
+OUTPUT_FORMAT=csv
 ```
 
-**Note**: The GitHub App authentication replaces the previous Personal Access Token (PAT) method. This provides better security and more granular permissions.
+**Note**: The script uses Personal Access Token (PAT) authentication. Multiple tokens can be provided for better rate limit handling.
 
 ## Usage
 
-### Automated Workflow (Recommended)
+### Basic Usage
 
-The easiest way to run the complete analysis is using the automated workflow:
+Run the language analysis script directly:
 
-#### Option 1: Python Workflow Script
 ```bash
-python scripts/fetch_languages/run_language_analysis.py
+cd scripts/fetch_languages
+python fetch_languages.py
 ```
 
-#### Option 2: Windows Batch Script (Double-click or command line)
-```cmd
-run_language_analysis.bat
-```
+The script will:
+1. Look for an organizations CSV file at `scripts/output/organizations.csv`
+2. If not found, it will suggest running the fetch_orgs.py script first
+3. Process each organization and fetch language data for all repositories
+4. Generate output files in `scripts/fetch_languages/output/`
 
-The automated workflow will:
-1. Validate prerequisites (tokens, environment variables)
-2. Fetch all organizations from your GitHub Enterprise
-3. Validate the organization data
-4. Run language analysis across all repositories
-5. Generate comprehensive reports and logs
+### Getting Organization Data
 
-#### Workflow Features:
-- **Prerequisite Validation**: Checks .env file, tokens, and script availability
-- **CSV Validation**: Ensures organization data was fetched successfully
-- **Comprehensive Logging**: Detailed logs saved to `output/logs/workflow_execution_*.log`
-- **Error Recovery**: Clear error messages and guidance for troubleshooting
-- **Progress Tracking**: Real-time updates on workflow progress
-- **Output Summary**: Lists all generated files with sizes
-- **Cleanup**: Optional cleanup of old files (configurable)
+If you don't have an organizations CSV file, you need to run the organization fetcher first:
 
-### Manual Usage
-
-You can also run the scripts individually:
-
-#### Step 1: Fetch Organizations
 ```bash
-python scripts/fetch_languages/fetch_orgs.py
+cd scripts/fetch_Orgs
+python fetch_orgs.py
 ```
 
-#### Step 2: Fetch Language Data
-```bash
-python scripts/fetch_languages/fetch_languages.py
-```
+This will generate `scripts/output/organizations.csv` which the language script will use.
 
 ### Output
 
 The script generates reports in `scripts/fetch_languages/output/` directory:
 
-#### Workflow Output Files:
-- `organizations.csv`: List of all GitHub Enterprise organizations
-- `languages_report_YYYYMMDD_HHMMSS.csv`: Progressive language data
-- `languages_errors_YYYYMMDD_HHMMSS.csv`: Progressive error log
-- `languages_summary_YYYYMMDD_HHMMSS.csv`: Language summary
-- `logs/workflow_execution_YYYYMMDD_HHMMSS.log`: Complete workflow log
-- `logs/language_scan_YYYYMMDD_HHMMSS.log`: Detailed execution log
-- `logs/timing_report_YYYYMMDD_HHMMSS.csv`: Per-org timing analytics
+- `languages_report_YYYYMMDD_HHMMSS.csv`: Progressive language data for all repositories
+- `languages_errors_YYYYMMDD_HHMMSS.csv`: Progressive error log for organizations that failed
+- `languages_summary_YYYYMMDD_HHMMSS.csv`: Aggregated language statistics summary
 
 #### Error CSV Schema
 | Column        | Description                                 |
@@ -140,86 +114,57 @@ The script generates reports in `scripts/fetch_languages/output/` directory:
 | Error_Type   | Categorized error (e.g., TOKEN_POLICY, SAML) |
 | Error_Message| Full error message                          |
 | Timestamp    | When error occurred                         |
-| HTTP_Status  | HTTP status code if applicable              |
 
-#### Timing Report CSV Schema
-| Column           | Description                                 |
-|------------------|---------------------------------------------|
-| organization     | Organization name                           |
-| duration_seconds | Time taken to process (seconds)             |
-| repositories     | Number of repositories processed            |
-| language_records | Number of language records extracted        |
-| status           | SUCCESS or error type                       |
+### Console Output
 
-### Logs
-- All logs are saved to `scripts/fetch_languages/output/logs/`.
-- Includes start/end time, per-org timing, error details, and summary statistics.
-
-### Execution Summary Example
+The script provides progress updates in the console:
 ```
-=== EXECUTION SUMMARY ===
-Total execution time: 125.45 seconds (2.1 minutes)
-Organizations processed: 185
-Successful organizations: 167
-Failed organizations: 18
-Average time per successful org: 0.68 seconds
-Fastest organization: 0.12 seconds
-Slowest organization: 5.23 seconds (customer-sandbox)
-Processing rate: 1,247.3 language records per second
+Scanning organization: example-org (1/10)
+  ✓ Processed 25 repositories
+  ✓ Found 150 language records
+Scanning organization: another-org (2/10)
+  ⚠ SKIP: Token Policy Restriction (SSO/Expiry)
+...
+Total execution time: 45.23 seconds
+Organizations processed: 10
+Successful: 8
+Failed: 2
 ```
 
 ## Output Data Schema
 
-### Repository Languages Sheet
+### Languages Report CSV
 
 | Column | Description |
 |--------|-------------|
-| Organization_Name | GitHub organization name |
-| Project_Code | Parsed project code from org name (first segment) |
-| Cost_Center | Parsed cost center from org name (last segment) |
-| Repository_Name | Repository name |
-| Repository_Full_Name | Full repository path (org/repo) |
-| Is_Private | Whether repository is private |
-| Is_Archived | Whether repository is archived |
-| Is_Fork | Whether repository is a fork |
-| Primary_Language | Primary language detected by GitHub |
-| Language | Specific language being reported |
-| Language_Bytes | Bytes of code in this language |
-| Language_Percentage | Percentage of repository code in this language |
-| Language_Color | GitHub color code for the language |
-| Total_Languages_Count | Total number of languages in repository |
-| Total_Code_Bytes | Total bytes of code in repository |
-| Topics | Repository topics (comma-separated) |
-| Created_At | Repository creation timestamp |
-| Updated_At | Repository last update timestamp |
-| Pushed_At | Repository last push timestamp |
+| Organization | GitHub organization name |
+| Repository | Repository name |
+| Language | Programming language name |
+| Bytes | Bytes of code in this language |
+| Percentage | Percentage of repository code in this language |
 
-### Language Summary Sheet
+### Languages Summary CSV
 
 | Column | Description |
 |--------|-------------|
 | Language | Programming language name |
 | Repository_Count | Number of repositories using this language |
 | Total_Bytes | Total bytes of code in this language |
-| Percentage_Of_Total_Code | Percentage of all code in enterprise |
-| Percentage_Of_Repos | Percentage of repositories using this language |
 
 ## Organization Name Parsing
 
-The script parses organization names in the format `xxxxx-yyyyy-zzzzz`:
+The script can parse organization names in the format `xxxxx-yyyyy-zzzzz`:
 - **Project_Code**: First segment (xxxxx)
 - **Cost_Center**: Last segment (zzzzz)
 
-Organizations not following this format will have:
-- Project_Code: "NO PROJECT CODE"
-- Cost_Center: "NO COST CENTER"
+Organizations not following this format will be processed as-is.
 
 ## Performance & Rate Limits
 
-- **GraphQL Efficiency**: Fetches up to 100 repositories per query
-- **Multi-token Support**: Rotates through multiple tokens for better rate limits
+- **GraphQL Efficiency**: Fetches up to 50 repositories per query with pagination
+- **Multi-token Support**: Can rotate through multiple tokens provided in `GH_PATS` for better rate limits
 - **Retry Logic**: Exponential backoff for transient failures
-- **Rate Limit Consideration**: Small delays between organization queries
+- **Rate Limit Handling**: Automatic delays when rate limits are low
 
 ### Estimated Execution Time
 
@@ -232,19 +177,18 @@ Organizations not following this format will have:
 ### Authentication Errors
 
 ```
-ValueError: No GitHub token found
+ValueError: Please set GH_PATS and GH_ENTERPRISE_SLUG in .env file
 ```
-**Solution**: Ensure `GITHUB_TOKEN` or `GITHUB_TOKENS` is set in your `.env` file
+**Solution**: Ensure `GH_PATS` and `GH_ENTERPRISE_SLUG` are set in your `.env` file
 
-### Enterprise Not Found
+### Organizations CSV Not Found
 
 ```
-ValueError: Enterprise not found or not accessible
+Organizations CSV file not found
 ```
 **Solution**: 
-- Verify `GH_ENTERPRISE_SLUG` is correct
-- Ensure your token has `read:enterprise` permission
-- Check you have access to the enterprise
+- Run the fetch_orgs.py script first to generate the organizations.csv file
+- Or ensure the organizations.csv file exists at `scripts/output/organizations.csv`
 
 ### Rate Limit Issues
 
@@ -252,65 +196,37 @@ ValueError: Enterprise not found or not accessible
 GraphQL errors: API rate limit exceeded
 ```
 **Solution**:
-- Use multiple tokens in `GITHUB_TOKENS` (comma-separated)
+- Use multiple tokens in `GH_PATS` (comma-separated)
 - Wait for rate limit to reset (check logs for reset time)
-- Reduce concurrent operations
 
 ### Missing Repositories
 
 If some repositories are missing from the report:
 - Check repository access permissions
-- Verify token has appropriate scopes
-- Review logs for errors during fetching
+- Verify token has appropriate scopes (`read:org`, `repo`, `read:enterprise`)
+- Review the error CSV file for specific organization failures
 
 ## Advanced Configuration
 
 ### Custom Language Count
 
-To fetch more than 10 languages per repository, modify the `LANGUAGES_PER_REPO` constant:
+To fetch more than 10 languages per repository, modify the GraphQL query in the script:
 
 ```python
-LANGUAGES_PER_REPO = 20  # Fetch top 20 languages per repo
+languages(first: 20, orderBy: {field: SIZE, direction: DESC})
 ```
-
-And update the GraphQL query `languages(first: 20, ...)`
 
 ### Custom Repository Filters
 
-Add filters to the GraphQL query to exclude certain repositories:
+The script currently fetches repositories ordered by `UPDATED_AT`. You can modify the query to add additional filters if needed.
 
-```graphql
-repositories(first: 100, after: $after, isArchived: false) {
-  # Only fetch non-archived repositories
-}
-```
+## GitHub Actions Integration
 
-## Integration with CI/CD
-
-This script can be integrated into GitHub Actions or other CI/CD pipelines:
-
-```yaml
-- name: Analyze Enterprise Languages
-  env:
-    GH_ENTERPRISE_SLUG: ${{ secrets.ENTERPRISE_SLUG }}
-    GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-    OUTPUT_FORMAT: csv
-  run: |
-    python scripts/fetch_languages/fetch_languages.py
-```
-
-## Contributing
-
-When contributing, ensure:
-1. Code follows existing patterns and style
-2. Error handling is comprehensive
-3. Logging is informative
-4. Documentation is updated
+This script is automated by the 'Analyze Repository Languages' workflow in .github/workflows/fetch-language-analysis.yml.
 
 ## Support
 
 For issues or questions:
-1. Check the logs in `scripts/fetch_languages/output/logs/`
+1. Check the error CSV file in `scripts/fetch_languages/output/`
 2. Review the troubleshooting section above
 3. Verify your token permissions and enterprise access
-

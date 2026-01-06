@@ -1,4 +1,4 @@
-name: GitHub Enterprise Package Dependencies Analysis
+name: Analyze Package Dependencies
 
 on:
     workflow_dispatch:

@@ -1,4 +1,4 @@
-name: GitHub Enterprise Language Analysis
+name: Analyze Repository Languages
 
 on:
   workflow_dispatch:
