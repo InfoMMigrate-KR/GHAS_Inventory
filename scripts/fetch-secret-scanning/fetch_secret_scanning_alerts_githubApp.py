@@ -902,8 +902,17 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     Returns:
         Dict with commit author information
     """
-    repo_full_name = f"{alert.get('Organization_Name')}/{alert.get('Repository_Name')}"
-    alert_number = alert.get("Alert_Number", "unknown")
+    # Extract repository full name - handle both original API response and processed records
+    repo_full_name = safe_get(alert, "repository", "full_name")
+    if not repo_full_name:
+        # If not found, try to construct from processed record fields
+        org_name = alert.get("Organization_Name")
+        repo_name = alert.get("Repository_Name")
+        if org_name and repo_name:
+            repo_full_name = f"{org_name}/{repo_name}"
+
+    # Extract alert number - handle both formats
+    alert_number = safe_get(alert, "number") or alert.get("Alert_Number", "unknown")
 
     # Track commit SHAs we've already tried to avoid duplicates
     attempted_commits = set()
@@ -941,9 +950,15 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
             }
 
     # If has_more_locations, try to get all locations for more accurate attribution
-    if alert.get("Has_More_Locations") and alert.get("Locations_URL"):
+    # Handle both original API response and processed record formats
+    has_more_locations = alert.get("Has_More_Locations") or alert.get(
+        "has_more_locations", False
+    )
+    locations_url = alert.get("Locations_URL") or alert.get("locations_url")
+
+    if has_more_locations and locations_url:
         try:
-            locations = fetch_all_locations(alert.get("Locations_URL"), session)
+            locations = fetch_all_locations(locations_url, session)
             commit_locations = [loc for loc in locations if loc.get("type") == "commit"]
 
             if commit_locations:
@@ -996,7 +1011,9 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
             )
 
     # Fallback: try to use blob_sha with original flawed method as last resort
-    blob_sha = safe_get(alert, "Location_Blob_Sha")
+    blob_sha = safe_get(alert, "Location_Blob_Sha") or safe_get(
+        alert, "first_location_detected", "blob_sha"
+    )
     if blob_sha:
         logging.warning(
             f"Falling back to legacy blob_sha method for alert {alert_number} - attribution may be inaccurate"
