@@ -346,6 +346,14 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 repo_full_name
             )
 
+            # Debug: Log first_location_detected structure for specific alerts
+            alert_number = safe_get(alert, "number")
+            if alert_number in [1, 6]:
+                first_loc = alert.get("first_location_detected", {})
+                logging.info(f"DEBUG Alert {alert_number}: first_location_detected fields = {list(first_loc.keys())}")
+                logging.info(f"DEBUG Alert {alert_number}: commit_sha = {first_loc.get('commit_sha')}")
+                logging.info(f"DEBUG Alert {alert_number}: commit_url = {first_loc.get('commit_url')}")
+
             # Build record efficiently
             record = {
                 "Alert_Number": safe_get(alert, "number"),
@@ -384,6 +392,9 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 ),
                 "Location_Blob_URL": safe_get(
                     alert, "first_location_detected", "blob_url"
+                ),
+                "Location_Commit_URL": safe_get(
+                    alert, "first_location_detected", "commit_url"
                 ),
                 "Locations_URL": safe_get(alert, "locations_url"),
                 "Has_More_Locations": safe_get(
@@ -886,21 +897,22 @@ def fetch_commit_info(
 @retry_on_failure()
 def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     """
-    Get the best commit author for a secret scanning alert.
+    Get commit author using commit SHA directly from secret scanning API response.
+
+    IMPORTANT: Extracts commit SHA from multiple fields in the API response
+    including commit_url which may contain the current commit SHA.
 
     Strategy:
-    1. If has_more_locations is False, use first_location_detected
-    2. If has_more_locations is True, fetch all locations and:
-       - Deduplicate commit SHAs to avoid redundant API calls
-       - Try each unique commit SHA once
-       - Fall back to legacy blob_sha method if all commits are inaccessible
+    1. Try multiple commit SHA sources from the API response
+    2. Extract SHA from commit_url if direct commit_sha is not accessible
+    3. Use the first accessible commit SHA found
 
     Args:
         alert: Secret scanning alert dictionary
         session: Authenticated session
 
     Returns:
-        Dict with commit author information
+        Dict with commit author information using direct API response data
     """
     # Extract repository full name - handle both original API response and processed records
     repo_full_name = safe_get(alert, "repository", "full_name")
@@ -914,125 +926,90 @@ def get_best_commit_author(alert: Dict, session: requests.Session) -> Dict:
     # Extract alert number - handle both formats
     alert_number = safe_get(alert, "number") or alert.get("Alert_Number", "unknown")
 
-    # Track commit SHAs we've already tried to avoid duplicates
-    attempted_commits = set()
-    best_method = "unknown"
-
-    # First, try to use commit_sha from first_location_detected
-    first_commit_sha = safe_get(alert, "first_location_detected", "commit_sha")
-    if first_commit_sha:
-        attempted_commits.add(first_commit_sha)
-        commit_info = fetch_commit_info(repo_full_name, first_commit_sha, session)
-        if commit_info.get("author") or commit_info.get("committer"):
-            # Success! We have commit info (author and/or committer)
-            logging.debug(
-                f"Using first location commit for alert {alert_number}: {first_commit_sha[:8]}..."
-            )
-            best_method = f"first_location_{commit_info.get('method', 'unknown')}"
-            return {
-                "author": commit_info.get("author"),
-                "committer": commit_info.get("committer"),
-                "sha": commit_info.get("sha")
-                or first_commit_sha,  # Preserve original SHA
-                "method": best_method,
-            }
+    # Debug: Log the entire first_location_detected structure for troubleshooting
+    first_location = alert.get("first_location_detected", {})
+    if first_location and alert_number in [1, 6]:  # Log details for specific alerts
+        logging.info(f"DEBUG Alert {alert_number}: first_location_detected keys: {list(first_location.keys())}")
+        logging.info(f"DEBUG Alert {alert_number}: commit_sha = {first_location.get('commit_sha')}")
+        logging.info(f"DEBUG Alert {alert_number}: commit_url = {first_location.get('commit_url')}")
+    
+    # Try multiple potential commit SHA sources from the API response
+    potential_commit_shas = []
+    
+    # 1. Direct commit_sha from first_location_detected
+    commit_sha_direct = safe_get(alert, "first_location_detected", "commit_sha")
+    if commit_sha_direct:
+        potential_commit_shas.append(("first_location_detected.commit_sha", commit_sha_direct))
+    
+    # 2. Extract commit SHA from commit_url in first_location_detected
+    commit_url = safe_get(alert, "first_location_detected", "commit_url")
+    if commit_url:
+        logging.debug(f"Alert {alert_number}: Found commit_url = {commit_url}")
+        if "/commits/" in commit_url:
+            # Extract SHA from URL like: https://api.github.com/repos/owner/repo/git/commits/SHA
+            commit_sha_from_url = commit_url.split("/commits/")[-1].split("?")[0]
+            if commit_sha_from_url and len(commit_sha_from_url) >= 7:  # Valid SHA length
+                logging.debug(f"Alert {alert_number}: Extracted SHA from commit_url = {commit_sha_from_url[:8]}...")
+                potential_commit_shas.append(("first_location_detected.commit_url", commit_sha_from_url))
         else:
-            # Commit exists in alert but API can't fetch it (deleted/force-pushed)
-            # Keep the SHA but mark author as unknown
-            logging.warning(
-                f"First location commit SHA {first_commit_sha[:8]}... is inaccessible via API for alert {alert_number} - keeping SHA but author unknown"
-            )
-            return {
-                "author": None,
-                "committer": None,
-                "sha": first_commit_sha,  # Keep the original commit SHA from the alert
-                "method": "commit_inaccessible_WARNING",
-            }
-
-    # If has_more_locations, try to get all locations for more accurate attribution
-    # Handle both original API response and processed record formats
-    has_more_locations = alert.get("Has_More_Locations") or alert.get(
-        "has_more_locations", False
-    )
-    locations_url = alert.get("Locations_URL") or alert.get("locations_url")
-
-    if has_more_locations and locations_url:
-        try:
-            locations = fetch_all_locations(locations_url, session)
-            commit_locations = [loc for loc in locations if loc.get("type") == "commit"]
-
-            if commit_locations:
-                # Collect unique commit SHAs we haven't tried yet
-                unique_commit_shas = []
-                for location in commit_locations:
-                    commit_sha = safe_get(location, "details", "commit_sha")
-                    if commit_sha and commit_sha not in attempted_commits:
-                        unique_commit_shas.append(commit_sha)
-                        attempted_commits.add(commit_sha)
-
+            logging.debug(f"Alert {alert_number}: commit_url doesn't contain '/commits/': {commit_url}")
+    else:
+        logging.debug(f"Alert {alert_number}: No commit_url found in first_location_detected")
+    
+    # 3. Check for any other direct commit fields at root level
+    root_commit_sha = alert.get("commit_sha")
+    if root_commit_sha:
+        potential_commit_shas.append(("root.commit_sha", root_commit_sha))
+    
+    # 4. Check for latest_commit_sha if it exists
+    latest_commit_sha = alert.get("latest_commit_sha")
+    if latest_commit_sha:
+        potential_commit_shas.append(("root.latest_commit_sha", latest_commit_sha))
+    
+    # Log what we found
+    logging.debug(f"Found {len(potential_commit_shas)} potential commit SHAs for alert {alert_number}")
+    for source_name, sha in potential_commit_shas:
+        logging.debug(f"  {source_name}: {sha[:8]}...")
+    
+    # Try each potential commit SHA until we find an accessible one
+    accessible_shas = []
+    inaccessible_shas = []
+    
+    for source_name, commit_sha in potential_commit_shas:
+        if commit_sha:
+            commit_info = fetch_commit_info(repo_full_name, commit_sha, session)
+            if commit_info.get("author") or commit_info.get("committer"):
+                # Success! We have commit info - use this one
                 logging.debug(
-                    f"Found {len(unique_commit_shas)} unique commit SHAs to try for alert {alert_number}"
+                    f"Successfully used {source_name} for alert {alert_number}: {commit_sha[:8]}..."
                 )
-
-                # Try each unique commit SHA
-                for commit_sha in unique_commit_shas:
-                    commit_info = fetch_commit_info(repo_full_name, commit_sha, session)
-                    if commit_info.get("author"):
-                        logging.debug(
-                            f"Successfully found commit author from SHA {commit_sha[:8]}... for alert {alert_number}"
-                        )
-                        best_method = (
-                            f"multi_location_{commit_info.get('method', 'unknown')}"
-                        )
-                        return {
-                            "author": commit_info.get("author"),
-                            "committer": commit_info.get("committer"),
-                            "sha": commit_info.get("sha"),
-                            "method": best_method,
-                        }
-                    else:
-                        logging.debug(
-                            f"Commit SHA {commit_sha[:8]}... failed for alert {alert_number}"
-                        )
-
-                # If all unique commits failed
-                if unique_commit_shas:
-                    logging.debug(
-                        f"All {len(unique_commit_shas)} unique commit SHAs failed for alert {alert_number}, falling back to legacy method"
-                    )
-                else:
-                    logging.debug(
-                        f"No new commit SHAs to try for alert {alert_number} (all were duplicates)"
-                    )
-
-        except Exception as e:
-            logging.warning(
-                f"Failed to get commit author from all locations for alert {alert_number}: {e}"
-            )
-
-    # Fallback: try to use blob_sha with original flawed method as last resort
-    blob_sha = safe_get(alert, "Location_Blob_Sha") or safe_get(
-        alert, "first_location_detected", "blob_sha"
-    )
-    if blob_sha:
+                return {
+                    "author": commit_info.get("author"),
+                    "committer": commit_info.get("committer"),
+                    "sha": commit_sha,
+                    "method": f"{source_name.replace('.', '_')}_{commit_info.get('method', 'unknown')}",
+                }
+            else:
+                # This SHA is inaccessible, but keep track of it and try the next one
+                inaccessible_shas.append((source_name, commit_sha))
+                logging.debug(f"Commit SHA from {source_name} is inaccessible for alert {alert_number}: {commit_sha[:8]}... - trying next source")
+    
+    # If no accessible commits found, preserve the first inaccessible one as fallback
+    if inaccessible_shas:
+        source_name, commit_sha = inaccessible_shas[0]
         logging.warning(
-            f"Falling back to legacy blob_sha method for alert {alert_number} - attribution may be inaccurate"
+            f"All commit SHAs are inaccessible for alert {alert_number}. Using {source_name}: {commit_sha[:8]}..."
         )
-        legacy_info = fetch_commit_info_legacy(repo_full_name, blob_sha, session)
-        # Accept legacy result even if author is None (user prefers blank to wrong attribution)
-        # We still return valid committer info for transparency
-        if legacy_info.get("committer") or legacy_info.get("sha"):
-            return {
-                "author": legacy_info.get("author"),  # May be None - that's OK
-                "committer": legacy_info.get("committer"),
-                "sha": legacy_info.get("sha"),
-                "method": "legacy_fallback_WARNING",
-            }
+        return {
+            "author": None,
+            "committer": None,
+            "sha": commit_sha,
+            "method": f"{source_name.replace('.', '_')}_inaccessible_WARNING",
+        }
 
-    logging.debug(
-        f"No commit author found for alert {alert_number} - all methods failed"
-    )
-    return {"author": None, "committer": None, "sha": None, "method": "all_failed"}
+    # No commit SHA found in API response
+    logging.debug(f"No commit SHA found in API response for alert {alert_number}")
+    return {"author": None, "committer": None, "sha": None, "method": "no_commit_in_response"}
 
 
 def fetch_commit_info_legacy(
@@ -1521,6 +1498,7 @@ def create_secret_scanning_csv(timestamp: str) -> str:
             "Location_End_Column",
             "Location_Blob_Sha",
             "Location_Blob_URL",
+            "Location_Commit_URL",
             "Locations_URL",
             "Has_More_Locations",
             "Commit_Author",
@@ -2004,7 +1982,13 @@ def enrich_organization_alerts_from_csv(
                             raw_alert = raw
                             break
 
-                    # Build alert dict with first_location_detected for commit lookup
+                    # Build alert dict with first_location_detected from CSV data
+                    # Extract commit_sha from Location_Commit_URL if available
+                    location_commit_url = csv_alert.get("Location_Commit_URL", "")
+                    commit_sha_from_url = None
+                    if location_commit_url and "/commits/" in location_commit_url:
+                        commit_sha_from_url = location_commit_url.split("/commits/")[-1].split("?")[0]
+                    
                     alert_for_commit = {
                         "Organization_Name": csv_alert.get("Organization_Name"),
                         "Repository_Name": csv_alert.get("Repository_Name"),
@@ -2015,11 +1999,11 @@ def enrich_organization_alerts_from_csv(
                         == "True",
                         "Locations_URL": csv_alert.get("Locations_URL"),
                         "Location_Blob_Sha": csv_alert.get("Location_Blob_Sha"),
-                        "first_location_detected": (
-                            raw_alert.get("first_location_detected")
-                            if raw_alert
-                            else None
-                        ),
+                        "first_location_detected": {
+                            "commit_sha": commit_sha_from_url,  # Use SHA from commit_url!
+                            "commit_url": location_commit_url,
+                            "blob_sha": csv_alert.get("Location_Blob_Sha"),
+                        },
                     }
 
                     # Enrich with commit information using improved logic
