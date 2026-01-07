@@ -253,6 +253,7 @@ CSB-Demo
    ValueError: Could not authenticate with any known organization: ['org1', 'org2']. 
    Please ensure the GitHub App is installed on at least one of these organizations.
    ```
+   **💡 Pro Tip**: Use the automated [GitHub App Installation Tool](../install_gitHubApp/README.md) to install your app across all enterprise organizations!
 
 3. **Enterprise Not Found**:
    ```

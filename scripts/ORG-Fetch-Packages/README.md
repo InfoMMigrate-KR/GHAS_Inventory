@@ -68,6 +68,7 @@ Before using this tool, you need to create and configure a GitHub App:
 4. **Install the App**:
    - Install the GitHub App on the organizations you want to analyze
    - You can install it on specific repositories or all repositories in the organization
+   - **💡 Pro Tip**: Use the automated [GitHub App Installation Tool](../install_gitHubApp/README.md) to install across all enterprise organizations!
 
 5. **Configure Environment Variables**:
    - Set `GH_APP_ID` to your app's ID

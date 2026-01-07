@@ -68,6 +68,8 @@ You need to create and install a GitHub App with the following permissions:
 
 Install the GitHub App to all organizations in your enterprise where you want to fetch secret scanning alerts.
 
+**💡 Pro Tip**: Use the automated [GitHub App Installation Tool](../install_gitHubApp/README.md) to install your app across all enterprise organizations at once!
+
 #### 3. Environment Variables
 
 Create a `.env` file in the project root with the following variables:

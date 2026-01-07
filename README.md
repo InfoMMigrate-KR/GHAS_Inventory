@@ -32,6 +32,7 @@ Direct local execution with full control over parameters and environment.
 
 | Workflow File | Purpose | Trigger Options |
 |--------------|---------|-----------------|
+| [install-github-app.yml](.github/workflows/install-github-app.yml) | Install/uninstall GitHub Apps across enterprise | Manual |
 | [fetch-secret-scanning-alerts.yml](.github/workflows/fetch-secret-scanning-alerts.yml) | Fetch secret alerts using GitHub App | Manual / Scheduled |
 | [fetch-secret-scanning-alerts-pat.yml](.github/workflows/fetch-secret-scanning-alerts-pat.yml) | Fetch secret alerts using PAT | Manual / Scheduled (Weekly) |
 | [fetch-language-analysis.yml](.github/workflows/fetch-language-analysis.yml) | Analyze repository languages | Manual |
@@ -40,7 +41,71 @@ Direct local execution with full control over parameters and environment.
 
 ---
 
-### 🔍 1. Fetch Secret Alerts (GitHub App)
+### � 0. Install GitHub Apps Across Enterprise
+
+**Workflow File**: `.github/workflows/install-github-app.yml`
+
+**Purpose**: Automates installation and uninstallation of GitHub Apps across all organizations in the enterprise.
+
+**Triggers**:
+- ✅ Manual (`workflow_dispatch`)
+
+**Input Parameters**:
+| Parameter | Type | Default | Options | Description |
+|-----------|------|---------|---------|-------------|
+| `repository_selection` | choice | `all` | `all`, `selected` | Repository selection for app installation |
+| `parallel` | boolean | `false` | - | Enable parallel processing |
+| `workers` | string | `5` | - | Number of parallel workers |
+| `dry_run` | boolean | `false` | - | Preview changes without making them |
+| `uninstall` | boolean | `false` | - | Uninstall apps instead of installing |
+
+**Required Repository Variables**:
+```bash
+GH_ENTERPRISE_SLUG       # GitHub Enterprise slug
+INSTALLER_APP_ID         # App ID of the installer app
+INSTALLER_INSTALL_ID     # Installation ID of the installer app
+AUTOMATION_APP_CLIENT_IDS # Comma-separated Client IDs of automation apps
+```
+
+**Required Repository Secrets**:
+```bash
+INSTALLER_PRIVATE_KEY    # Installer app's private key content
+AUTOMATION_APPS_CONFIG   # JSON config for uninstall mode
+```
+
+**Output**: 
+- Artifacts: `github-app-installation-results`
+- Location: `outputs/` and `scripts/install_gitHubApp/logs/`
+- Retention: 30 days
+
+**How to Execute**:
+
+**Install Mode**:
+1. Navigate to **Actions** → **Install GitHub Apps Across Enterprise**
+2. Click **Run workflow**
+3. Configure parameters (leave `uninstall` as `false`)
+4. Set `dry_run` to `true` to preview first
+5. Click **Run workflow**
+
+**Uninstall Mode**:
+1. Ensure `AUTOMATION_APPS_CONFIG` secret is configured with app credentials
+2. Navigate to **Actions** → **Install GitHub Apps Across Enterprise**
+3. Click **Run workflow**
+4. Set `uninstall` to `true`
+5. Set `dry_run` to `true` to preview first
+6. Click **Run workflow**
+
+**Use Cases**:
+- 🔧 Bulk installation of automation apps across enterprise organizations
+- 🗑️ Clean removal of apps from all organizations
+- 📊 Enterprise-wide app deployment management
+- ⚡ High-performance parallel operations for large enterprises
+
+**Documentation**: See [scripts/install_gitHubApp/README.md](scripts/install_gitHubApp/README.md) for detailed setup and usage instructions, or the [GitHub Actions Setup Guide](docs/GitHub-Actions-Workflow-Setup.md) for workflow configuration.
+
+---
+
+### �🔍 1. Fetch Secret Alerts (GitHub App)
 
 **Workflow File**: `.github/workflows/fetch-secret-scanning-alerts.yml`
 
