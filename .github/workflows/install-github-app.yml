@@ -83,7 +83,7 @@ jobs:
                     $( [ "${{ inputs.dry_run }}" = "true" ] && echo "--dry-run" ) \
                     $( [ "${{ inputs.uninstall }}" = "true" ] && echo "--uninstall --automation-apps-config ../../automation-apps-config.json" )
               env:
-                  INSTALLER_PRIVATE_KEY: ${{ secrets.INSTALLER_PRIVATE_KEY_PEM }}
+                  INSTALLER_PRIVATE_KEY: ${{ secrets.INSTALLER_PRIVATE_KEY }}
 
             - name: Upload results
               if: always()
