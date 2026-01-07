@@ -63,10 +63,6 @@ jobs:
 
             - name: Run GitHub App Installation
               run: |
-                  # Create temporary private key file from secret content
-                  echo "$INSTALLER_PRIVATE_KEY_CONTENT" > /tmp/installer-key.pem
-                  chmod 600 /tmp/installer-key.pem
-
                   # Create automation apps config if needed for uninstall
                   if [ "${{ inputs.uninstall }}" = "true" ]; then
                     echo '${{ secrets.AUTOMATION_APPS_CONFIG }}' > automation-apps-config.json
@@ -78,7 +74,6 @@ jobs:
                   python install_github_all.py \
                     --enterprise "$GH_ENTERPRISE_SLUG" \
                     --installer-app-id "$INSTALLER_APP_ID" \
-                    --installer-private-key /tmp/installer-key.pem \
                     --installer-install-id "$INSTALLER_INSTALL_ID" \
                     --automation-app-client-ids "$AUTOMATION_APP_CLIENT_IDS" \
                     --repository-selection "${{ inputs.repository_selection }}" \
@@ -88,7 +83,7 @@ jobs:
                     $( [ "${{ inputs.dry_run }}" = "true" ] && echo "--dry-run" ) \
                     $( [ "${{ inputs.uninstall }}" = "true" ] && echo "--uninstall --automation-apps-config ../../automation-apps-config.json" )
               env:
-                  INSTALLER_PRIVATE_KEY_CONTENT: ${{ secrets.INSTALLER_PRIVATE_KEY }}
+                  INSTALLER_PRIVATE_KEY: ${{ secrets.INSTALLER_PRIVATE_KEY }}
 
             - name: Upload results
               if: always()
@@ -112,5 +107,4 @@ jobs:
             - name: Cleanup sensitive files
               if: always()
               run: |
-                  rm -f /tmp/installer-key.pem
                   rm -f automation-apps-config.json

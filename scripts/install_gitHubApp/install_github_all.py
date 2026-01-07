@@ -204,16 +204,24 @@ class GitHubAppAuth:
         self._private_key: Optional[str] = None
         self._token_cache: Dict[str, Dict[str, Any]] = {}
 
-        # Validate private key exists
-        if not Path(private_key_path).exists():
-            raise FileNotFoundError(f"Private key not found: {private_key_path}")
+        # Check if private_key_path is actually PEM content or a file path
+        if "-----BEGIN" in private_key_path and "-----END" in private_key_path:
+            # It's PEM content, store it directly
+            self._private_key = private_key_path
+            self.private_key_path = "<inline-content>"
+        else:
+            # It's a file path, validate it exists
+            if not Path(private_key_path).exists():
+                raise FileNotFoundError(f"Private key not found: {private_key_path}")
 
     @property
     def private_key(self) -> str:
         """Lazy load private key."""
         if self._private_key is None:
-            with open(self.private_key_path, "r") as f:
-                self._private_key = f.read()
+            # Only read from file if it's not inline content
+            if self.private_key_path != "<inline-content>":
+                with open(self.private_key_path, "r") as f:
+                    self._private_key = f.read()
         return self._private_key
 
     def generate_jwt(self) -> str:
