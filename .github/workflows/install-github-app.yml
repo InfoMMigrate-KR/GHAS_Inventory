@@ -1,0 +1,110 @@
+name: Install GitHub Apps Across Enterprise
+
+on:
+    workflow_dispatch:
+        inputs:
+            repository_selection:
+                description: "Repository selection for app installation"
+                required: false
+                default: "all"
+                type: choice
+                options:
+                    - all
+                    - selected
+            parallel:
+                description: "Enable parallel processing"
+                required: false
+                default: false
+                type: boolean
+            workers:
+                description: "Number of parallel workers"
+                required: false
+                default: "5"
+                type: string
+            dry_run:
+                description: "Perform a dry run (preview changes without making them)"
+                required: false
+                default: false
+                type: boolean
+            uninstall:
+                description: "Uninstall apps instead of installing"
+                required: false
+                default: false
+                type: boolean
+
+env:
+    # Configuration from repository variables (non-sensitive)
+    GH_ENTERPRISE_SLUG: ${{ vars.GH_ENTERPRISE_SLUG }}
+    INSTALLER_APP_ID: ${{ vars.INSTALLER_APP_ID }}
+    INSTALLER_INSTALL_ID: ${{ vars.INSTALLER_INSTALL_ID }}
+    AUTOMATION_APP_CLIENT_IDS: ${{ vars.AUTOMATION_APP_CLIENT_IDS }}
+
+jobs:
+    install-github-apps:
+        runs-on: ubuntu-latest
+
+        permissions:
+            contents: read
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+                  cache: "pip"
+
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  pip install -r requirements.txt
+
+            - name: Run GitHub App Installation
+              run: |
+                  # Create automation apps config if needed for uninstall
+                  if [ "${{ inputs.uninstall }}" = "true" ]; then
+                    echo '${{ secrets.AUTOMATION_APPS_CONFIG }}' > automation-apps-config.json
+                  fi
+
+                  # Execute the script
+                  cd scripts/install_gitHubApp
+
+                  python install_github_all.py \
+                    --enterprise "$GH_ENTERPRISE_SLUG" \
+                    --installer-app-id "$INSTALLER_APP_ID" \
+                    --installer-install-id "$INSTALLER_INSTALL_ID" \
+                    --automation-app-client-ids "$AUTOMATION_APP_CLIENT_IDS" \
+                    --repository-selection "${{ inputs.repository_selection }}" \
+                    --output-folder ../../outputs \
+                    --verbose \
+                    $( [ "${{ inputs.parallel }}" = "true" ] && echo "--parallel --workers ${{ inputs.workers }}" ) \
+                    $( [ "${{ inputs.dry_run }}" = "true" ] && echo "--dry-run" ) \
+                    $( [ "${{ inputs.uninstall }}" = "true" ] && echo "--uninstall --automation-apps-config ../../automation-apps-config.json" )
+              env:
+                  INSTALLER_PRIVATE_KEY: ${{ secrets.INSTALLER_PRIVATE_KEY_PEM }}
+
+            - name: Upload results
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: github-app-installation-results
+                  path: |
+                      outputs/
+                      scripts/install_gitHubApp/logs/
+                  retention-days: 30
+
+            - name: Upload organizations CSV
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: organizations-csv
+                  path: outputs/organizations.csv
+                  retention-days: 30
+              continue-on-error: true
+
+            - name: Cleanup sensitive files
+              if: always()
+              run: |
+                  rm -f automation-apps-config.json

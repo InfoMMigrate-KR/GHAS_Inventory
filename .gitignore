@@ -4,7 +4,7 @@
 # Output files
 scripts/output/
 *.xlsx
-*.csv
+# *.csv
 *.log
 
 # Python
