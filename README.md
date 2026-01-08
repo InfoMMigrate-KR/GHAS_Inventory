@@ -545,6 +545,30 @@ GH_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----..."
 
 ---
 
+## 🔧 Required GitHub Apps Setup
+
+### 1️⃣ Installer App
+**Purpose**: Has permission to install apps in organizations
+
+**Creation**:
+1. Enterprise Settings → GitHub Apps → New GitHub App
+2. **Required Permission**: "Enterprise permissions" > "Enterprise organization installations" (read/write)
+3. Install the App on the Enterprise account
+4. Note: App ID, Installation ID, download private key
+
+### 2️⃣ Automation App(s)
+**Purpose**: The app(s) you want installed everywhere
+
+**Creation**:
+1. Create with whatever permissions your automation needs
+2. **Required Permission**: 
+  "Repository permissions" > "Actions" (read/write), "Secret scanning alerts" (read/write), "Workflows" (read/write)
+  "Organization permissions" > "Secrets" (read/write), "Variables" (read/write)
+3. Note the Client ID (starts with "Iv1.")
+4. For uninstall: Note App ID and download private key
+
+---
+
 #### 🚀 8. Install/Uninstall GitHub Apps Enterprise-wide
 
 **Script**: `scripts/install_gitHubApp/install_github_all.py`

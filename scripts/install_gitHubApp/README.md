@@ -231,8 +231,8 @@ python install_github_all.py \
 
 **Creation**:
 1. Enterprise Settings → GitHub Apps → New GitHub App
-2. **Required Permission**: "Enterprise organization installations" (read/write)
-3. Install on the enterprise account
+2. **Required Permission**: "Enterprise permissions" > "Enterprise organization installations" (read/write)
+3. Install the App on the Enterprise account
 4. Note: App ID, Installation ID, download private key
 
 ### 2️⃣ Automation App(s)
@@ -240,8 +240,11 @@ python install_github_all.py \
 
 **Creation**:
 1. Create with whatever permissions your automation needs
-2. Note the Client ID (starts with "Iv1.")
-3. For uninstall: Note App ID and download private key
+2. **Required Permission**: 
+  "Repository permissions" > "Actions" (read/write), "Secret scanning alerts" (read/write), "Workflows" (read/write)
+  "Organization permissions" > "Secrets" (read/write), "Variables" (read/write)
+3. Note the Client ID (starts with "Iv1.")
+4. For uninstall: Note App ID and download private key
 
 ---
 
