@@ -311,7 +311,7 @@ For direct local execution with full control over parameters and environment.
 
 ### Prerequisites
 
-- 🐍 Python 3.9+
+- 🐍 Python 3.9+ (GitHub Actions uses 3.12)
 - 🔑 GitHub Personal Access Tokens with `repo` scope
 - 🏢 Access to GitHub Enterprise organization
 
@@ -542,6 +542,68 @@ GH_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----..."
 **Purpose**: 
 - Generates organization list required by other scripts
 - Must be run before language or package analysis
+
+---
+
+#### 🚀 8. Install/Uninstall GitHub Apps Enterprise-wide
+
+**Script**: `scripts/install_gitHubApp/install_github_all.py`
+
+```bash
+cd scripts/install_gitHubApp
+
+# Basic installation (single app)
+python install_github_all.py \
+    --enterprise my-enterprise \
+    --installer-app-id 123456 \
+    --installer-private-key /path/to/installer.pem \
+    --installer-install-id 789012 \
+    --automation-app-client-id Iv1.abc123def456 \
+    --dry-run --verbose
+
+# Multi-app installation
+python install_github_all.py \
+    --automation-app-client-ids Iv1.abc123,Iv1.def456 \
+    --parallel --workers 10 \
+    --dry-run --verbose
+
+# Uninstall apps
+python install_github_all.py \
+    --automation-app-client-ids Iv1.abc123,Iv1.def456 \
+    --automation-apps-config automation-apps-config.json \
+    --uninstall --dry-run --verbose
+```
+
+**Environment Variables**:
+```bash
+GH_ENTERPRISE_SLUG=your-enterprise
+INSTALLER_APP_ID=123456
+INSTALLER_PRIVATE_KEY=/path/to/installer-private-key.pem
+INSTALLER_INSTALL_ID=789012
+AUTOMATION_APP_CLIENT_IDS=Iv1.abc123,Iv1.def456
+AUTOMATION_APPS_CONFIG=automation-apps-config.json  # For uninstall
+```
+
+**Key Arguments**:
+- `--parallel --workers N`: Enable parallel processing with N workers
+- `--dry-run`: Preview changes without making them
+- `--uninstall`: Switch to uninstall mode
+- `--batch-size N`: Control memory usage for large enterprises
+- `--resume-from state`: Resume interrupted operations
+
+**Output**: 
+- `outputs/api_app_installation_{enterprise}_{timestamp}.json`
+- `scripts/logs/api_app_installer_{enterprise}_{timestamp}.log`
+- Comprehensive installation/uninstallation reports
+
+**Purpose**: 
+- Bulk install automation apps across all enterprise organizations
+- Remove previously installed apps enterprise-wide
+- High-performance operations for large enterprises (500+ orgs)
+
+**⚠️ Important**: Always run with `--dry-run` first to preview operations!
+
+**Documentation**: See [scripts/install_gitHubApp/README.md](scripts/install_gitHubApp/README.md) for comprehensive setup instructions and advanced usage.
 
 ---
 

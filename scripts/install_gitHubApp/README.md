@@ -108,7 +108,7 @@ For uninstall mode, create this JSON structure as a repository secret:
 
 ### Prerequisites
 
-- 🐍 Python 3.9+
+- 🐍 Python 3.9+ (GitHub Actions uses 3.12)
 - 🔑 GitHub Apps with proper permissions
 - 🏢 Access to GitHub Enterprise
 
@@ -193,6 +193,33 @@ python install_github_all.py \
 ```bash
 # Configure .env file then run:
 python install_github_all.py --dry-run --verbose
+```
+
+#### Resume Interrupted Operations
+```bash
+# Resume from enterprise state file
+python install_github_all.py --resume-from state --verbose
+
+# Resume from specific output file
+python install_github_all.py --resume-from outputs/api_app_installation_enterprise_20260107_223749.json
+```
+
+#### Advanced Options
+```bash
+# Custom API base URL and export organizations CSV
+python install_github_all.py \
+    --base-url https://api.github.com \
+    --export-orgs-csv \
+    --batch-size 50 \
+    --rate-limit-delay 0.1 \
+    --verbose
+
+# Uninstall with individual app credentials
+python install_github_all.py \
+    --automation-app-client-id Iv1.abc123def456 \
+    --automation-app-id 987654 \
+    --automation-app-private-key /path/to/automation.pem \
+    --uninstall --dry-run --verbose
 ```
 
 ---
@@ -289,7 +316,52 @@ Based on actual execution metrics:
 
 ---
 
-## 🛠️ Troubleshooting
+## � Command Line Arguments Reference
+
+### Required Arguments
+
+| Argument | Environment Variable | Description | Example |
+|----------|---------------------|-------------|----------|
+| `--enterprise` | `GH_ENTERPRISE_SLUG` | GitHub Enterprise slug | `my-enterprise` |
+| `--installer-app-id` | `INSTALLER_APP_ID` | App ID of the installer app | `123456` |
+| `--installer-private-key` | `INSTALLER_PRIVATE_KEY` | Path to installer app's private key | `/path/to/key.pem` |
+| `--installer-install-id` | `INSTALLER_INSTALL_ID` | Installation ID of installer app | `789012` |
+
+### App Selection (One Required)
+
+| Argument | Environment Variable | Description | Example |
+|----------|---------------------|-------------|----------|
+| `--automation-app-client-id` | `AUTOMATION_APP_CLIENT_ID` | Single app Client ID | `Iv1.abc123def456` |
+| `--automation-app-client-ids` | `AUTOMATION_APP_CLIENT_IDS` | Multiple app Client IDs | `Iv1.abc123,Iv1.def456` |
+
+### Optional Arguments
+
+| Argument | Default | Description | Example |
+|----------|---------|-------------|----------|
+| `--repository-selection` | `all` | Repository selection for installation | `all`, `selected` |
+| `--output-folder` | `outputs` | Output folder for results | `./results` |
+| `--parallel` | `false` | Enable parallel processing | (flag) |
+| `--workers` | `5` | Number of parallel workers | `10` |
+| `--batch-size` | `100` | Orgs per batch (memory control) | `50` |
+| `--rate-limit-delay` | `0.0` | Minimum delay between API calls | `0.1` |
+| `--dry-run` | `false` | Preview without making changes | (flag) |
+| `--verbose` | `false` | Enable detailed logging | (flag) |
+| `--base-url` | `https://api.github.com` | GitHub API base URL | Custom GitHub instance |
+| `--export-orgs-csv` | `false` | Export organizations to CSV | (flag) |
+| `--resume-from` | - | Resume from previous run | `state`, file path |
+
+### Uninstall Mode Arguments
+
+| Argument | Environment Variable | Description | Example |
+|----------|---------------------|-------------|----------|
+| `--uninstall` | - | Switch to uninstall mode | (flag) |
+| `--automation-app-id` | - | App ID for single app uninstall | `987654` |
+| `--automation-app-private-key` | - | Private key for single app uninstall | `/path/to/key.pem` |
+| `--automation-apps-config` | `AUTOMATION_APPS_CONFIG` | JSON config for multi-app uninstall | `apps-config.json` |
+
+---
+
+## �🛠️ Troubleshooting
 
 ### Common Issues
 
