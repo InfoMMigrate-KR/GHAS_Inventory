@@ -977,6 +977,11 @@ GHAS_Inventory/
 │       ├── fetch-language-analysis.yml
 │       ├── fetch-packages-analysis.yml
 │       └── assign-secret-scanning-alerts.yml
+├── docs/
+│   ├── agents/                 # GitHub Copilot custom agent definitions
+│   │   ├── README.md          # Agent deployment guide
+│   │   └── jenkins-migrator.agent.md  # Jenkins to GitHub Actions migration agent
+│   └── Secret_Scanning/        # Secret scanning documentation
 ├── scripts/
 │   ├── fetch-secret-scanning/  # Secret scanning scripts
 │   ├── fetch_languages/        # Language analysis scripts
@@ -987,3 +992,28 @@ GHAS_Inventory/
 ├── requirements.txt            # Python dependencies
 └── README.md                   # This file
 ```
+
+---
+
+## 🤖 GitHub Copilot Custom Agents
+
+This repository includes specialized GitHub Copilot custom agents for CI/CD migration tasks.
+
+### Jenkins to GitHub Actions Migration Agent
+
+**Location**: `docs/agents/jenkins-migrator.agent.md`
+
+**Purpose**: Specialized agent for migrating existing Jenkins pipelines to GitHub Actions workflows, supporting declarative, scripted, and YAML-based pipeline configurations.
+
+**Key Features**:
+- ✅ Converts Jenkins declarative pipelines to GitHub Actions workflows
+- ✅ Handles Jenkins scripted pipelines (Groovy-based imperative style)
+- ✅ Supports YAML-based Jenkins configurations
+- ✅ Expands Jenkins shared library calls inline
+- ✅ Migrates credential bindings to GitHub Secrets
+- ✅ Validates converted workflows with actionlint
+- ✅ Creates comprehensive migration documentation
+
+**Documentation**: See [`docs/agents/README.md`](docs/agents/README.md) for detailed information about agent deployment and usage.
+
+**Note**: Custom agents are documented in `docs/agents/` and deployed to `.github/agents/` when ready for production use. The `.github/agents/` directory is protected by repository rules to ensure proper review of agent configurations.
