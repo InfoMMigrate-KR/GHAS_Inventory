@@ -67,6 +67,108 @@ RATE_LIMIT_BUFFER = int(
     os.getenv("RATE_LIMIT_BUFFER") or "100"
 )  # Remaining requests before slowing down
 
+# GitHub returns default/provider patterns by default. Generic and
+# AI-detected patterns must be explicitly included in the `secret_type`
+# query parameter. Additional organization or enterprise custom pattern slugs
+# can be supplied through CUSTOM_SECRET_TYPES.
+DEFAULT_GENERIC_SECRET_TYPES = (
+    "ec_private_key",
+    "generic_private_key",
+    "http_basic_authentication_header",
+    "http_bearer_authentication_header",
+    "mongodb_connection_string",
+    "mysql_connection_url",
+    "openssh_private_key",
+    "password",
+    "pgp_private_key",
+    "postgres_connection_string",
+    "rsa_private_key",
+)
+INCLUDE_GENERIC_PATTERNS = os.getenv("INCLUDE_GENERIC_PATTERNS", "true").lower() in [
+    "true",
+    "1",
+    "yes",
+]
+AUTO_DISCOVER_CUSTOM_PATTERNS = os.getenv(
+    "AUTO_DISCOVER_CUSTOM_PATTERNS", "true"
+).lower() in ["true", "1", "yes"]
+
+
+def get_custom_secret_types(
+    custom_secret_types: Optional[Union[str, List[str]]] = None,
+) -> List[str]:
+    """Return configured custom pattern slugs."""
+    if custom_secret_types is None:
+        configured = os.getenv("CUSTOM_SECRET_TYPES", "").strip()
+    elif isinstance(custom_secret_types, str):
+        configured = custom_secret_types.strip()
+    else:
+        configured = ",".join(custom_secret_types)
+
+    return [
+        secret_type.strip()
+        for secret_type in configured.split(",")
+        if secret_type.strip() and secret_type.strip().lower() != "all"
+    ]
+
+
+def get_generic_secret_types(
+    custom_secret_types: Optional[Union[str, List[str]]] = None,
+) -> List[str]:
+    """Return built-in generic types plus configured custom pattern slugs."""
+    configured_types = get_custom_secret_types(custom_secret_types)
+
+    return list(
+        dict.fromkeys(
+            secret_type
+            for secret_type in (*DEFAULT_GENERIC_SECRET_TYPES, *configured_types)
+            if secret_type
+        )
+    )
+
+
+def classify_secret_type(
+    secret_type: Any, generic_secret_types: Optional[List[str]] = None
+) -> str:
+    """Classify a returned alert as a default or generic pattern."""
+    if not secret_type:
+        return "unknown"
+
+    known_types = (
+        get_generic_secret_types()
+        if generic_secret_types is None
+        else generic_secret_types
+    )
+    generic_types = {value.lower() for value in known_types}
+    return "generic" if str(secret_type).lower() in generic_types else "default"
+
+
+def merge_secret_scanning_alerts(*alert_lists: List[Dict]) -> List[Dict]:
+    """Merge default and generic alert responses without duplicate alerts."""
+    merged = []
+    seen = set()
+
+    for list_index, alerts in enumerate(alert_lists):
+        source_category = "default" if list_index == 0 else "generic"
+        for alert in alerts:
+            repository = alert.get("repository") or {}
+            key = (
+                repository.get("full_name"),
+                alert.get("number"),
+                alert.get("url") or alert.get("html_url"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            alert_copy = alert.copy()
+            # Preserve the API response source. A custom pattern can appear
+            # in both responses; the default response must remain classified
+            # as default to match GitHub's UI category totals.
+            alert_copy["_pattern_category"] = source_category
+            merged.append(alert_copy)
+
+    return merged
+
 
 @dataclass
 class PerformanceMetrics:
@@ -204,6 +306,23 @@ def retry_on_failure(max_retries: int = MAX_RETRIES, delay: int = RETRY_DELAY):
                     requests.exceptions.HTTPError,
                 ) as e:
                     last_exception = e
+                    response = getattr(e, "response", None)
+                    status_code = (
+                        response.status_code if response is not None else None
+                    )
+
+                    # Permission and other client errors are not transient.
+                    # Retry only rate limits and server/network failures.
+                    if (
+                        status_code is not None
+                        and 400 <= status_code < 500
+                        and status_code != 429
+                    ):
+                        logging.error(
+                            f"Non-retryable HTTP {status_code} from {func.__name__}: {e}"
+                        )
+                        raise
+
                     if attempt < max_retries - 1:
                         wait_time = delay * (2**attempt)  # Exponential backoff
                         logging.warning(
@@ -331,7 +450,9 @@ def extract_repository_info(repo_full_name: str) -> Tuple[str, str, str, str]:
     return org_name, repo_name, project_code, cost_center
 
 
-def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, None]:
+def extract_secret_scanning_data(
+    alerts: List[Dict], generic_secret_types: Optional[List[str]] = None
+) -> Generator[Dict, None, None]:
     """
     Extract relevant fields from secret scanning alerts using generator for memory efficiency.
     """
@@ -355,6 +476,10 @@ def extract_secret_scanning_data(alerts: List[Dict]) -> Generator[Dict, None, No
                 "Cost_Center": cost_center,
                 "Secret_Type": safe_get(alert, "secret_type_display_name"),
                 "Secret_Type_ID": safe_get(alert, "secret_type"),
+                "Pattern_Category": alert.get("_pattern_category")
+                or classify_secret_type(
+                    safe_get(alert, "secret_type"), generic_secret_types
+                ),
                 "State": safe_get(alert, "state"),
                 "Assignee": _extract_assignee(alert),
                 "Created_At": safe_get(alert, "created_at"),
@@ -489,6 +614,9 @@ def create_summary_data(
         validity_counts = Counter(
             alert.get("Validity") for alert in secret_scanning_data
         )
+        category_counts = Counter(
+            alert.get("Pattern_Category") for alert in secret_scanning_data
+        )
         leaked_count = sum(
             1 for alert in secret_scanning_data if alert.get("Publicly_Leaked")
         )
@@ -497,6 +625,9 @@ def create_summary_data(
             {
                 "Alert_Type": "Secret Scanning",
                 "Total_Count": len(secret_scanning_data),
+                "Default_Patterns": category_counts.get("default", 0),
+                "Generic_Patterns": category_counts.get("generic", 0),
+                "Unknown_Category": category_counts.get("unknown", 0),
                 "Active_Secrets": validity_counts.get("active", 0),
                 "Inactive_Secrets": validity_counts.get("inactive", 0),
                 "Unknown_Validity": validity_counts.get("unknown", 0),
@@ -545,6 +676,9 @@ def load_alert_config() -> Dict[str, Any]:
         ALERT_STATE: Alert state to fetch - open, resolved, all (default: all)
         OUTPUT_FILENAME: Custom output filename without extension (default: secret_scanning_report)
         OUTPUT_FORMAT: Output format - xlsx, csv, both (default: csv)
+        INCLUDE_GENERIC_PATTERNS: Include generic and AI-detected patterns (default: true)
+        CUSTOM_SECRET_TYPES: Comma-separated custom pattern slugs to add to the built-in generic types
+        AUTO_DISCOVER_CUSTOM_PATTERNS: Discover published organization custom pattern slugs (default: true)
         TEST_MODE: Enable test mode to limit organizations (default: false)
         TEST_ORG_LIMIT: Number of organizations to process in test mode (default: 10)
 
@@ -556,6 +690,9 @@ def load_alert_config() -> Dict[str, Any]:
         "state": os.getenv("ALERT_STATE", "all").lower(),
         "output": os.getenv("OUTPUT_FILENAME", "secret_scanning_report"),
         "format": os.getenv("OUTPUT_FORMAT", "csv").lower(),
+        "include_generic_patterns": INCLUDE_GENERIC_PATTERNS,
+        "custom_secret_types": get_custom_secret_types(),
+        "auto_discover_custom_patterns": AUTO_DISCOVER_CUSTOM_PATTERNS,
         "test_mode": os.getenv("TEST_MODE", "false").lower() in ["true", "1", "yes"],
         "test_org_limit": int(os.getenv("TEST_ORG_LIMIT", "10")),
     }
@@ -582,6 +719,16 @@ def load_alert_config() -> Dict[str, Any]:
     logging.info(f"  - Alert State: {config['state']}")
     logging.info(f"  - Output Format: {config['format']}")
     logging.info(f"  - Output Filename: {config['output']}")
+    logging.info(
+        f"  - Include Generic Patterns: {config['include_generic_patterns']}"
+    )
+    logging.info(
+        f"  - Auto-Discover Custom Patterns: {config['auto_discover_custom_patterns']}"
+    )
+    if config["include_generic_patterns"]:
+        logging.info(
+            f"  - Custom Secret Types: {', '.join(config['custom_secret_types']) or 'none'}"
+        )
     logging.info(f"  - Test Mode: {config['test_mode']}")
     if config["test_mode"]:
         logging.info(f"  - Test Org Limit: {config['test_org_limit']}")
@@ -1274,6 +1421,7 @@ def fetch_all_pages(
     session: requests.Session,
     params: Optional[Dict] = None,
     metrics: Optional[PerformanceMetrics] = None,
+    permission_hint: str = "Secret scanning alerts: Read",
 ) -> List[Dict]:
     """
     Fetches all pages of results from a GitHub API endpoint with intelligent rate limiting.
@@ -1284,6 +1432,7 @@ def fetch_all_pages(
         session (requests.Session): Authenticated session from GitHub App.
         params (dict): Query parameters for the request.
         metrics (PerformanceMetrics): Performance tracking object.
+        permission_hint (str): Permission name to include in 403 diagnostics.
 
     Returns:
         list: A list containing all items from all pages.
@@ -1352,8 +1501,9 @@ def fetch_all_pages(
                     metrics.memory_peak_mb = max(metrics.memory_peak_mb, memory_mb)
 
         except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code if e.response else None
-            error_msg = e.response.text if e.response else str(e)
+            response = e.response
+            status_code = response.status_code if response is not None else None
+            error_msg = response.text if response is not None else str(e)
 
             logging.error(
                 f"HTTP Error {status_code or 'unknown'} fetching {url}: {error_msg[:200]}"
@@ -1375,10 +1525,10 @@ def fetch_all_pages(
                     # Permission error - provide helpful message
                     logging.error(
                         f"Permission denied (403) for {endpoint_url}. "
-                        f"Ensure GitHub App has 'Secret scanning alerts: Read' permission "
+                        f"Ensure GitHub App has '{permission_hint}' permission "
                         f"and is installed in the organization."
                     )
-                    break
+                    raise
 
             if status_code == 429:
                 # Rate limited
@@ -1395,7 +1545,7 @@ def fetch_all_pages(
                 logging.error(
                     f"Client error {status_code} - stopping pagination for {endpoint_url}"
                 )
-                break
+                raise
 
             # Let the retry decorator handle 5xx errors
             raise
@@ -1413,6 +1563,54 @@ def fetch_all_pages(
         f"across {page_count} pages"
     )
     return all_results
+
+
+def discover_organization_custom_pattern_slugs(
+    org_name: str,
+    session: requests.Session,
+    metrics: Optional[PerformanceMetrics] = None,
+) -> List[str]:
+    """Discover published organization custom-pattern slugs from GitHub."""
+    endpoint = f"https://api.github.com/orgs/{org_name}/secret-scanning/custom-patterns"
+    params = {"state": "published", "per_page": 100}
+
+    try:
+        patterns = fetch_all_pages(
+            endpoint,
+            session,
+            params,
+            metrics,
+            permission_hint="Administration: Read",
+        )
+        slugs = sorted(
+            {
+                str(pattern.get("slug")).strip()
+                for pattern in patterns
+                if pattern.get("slug")
+            }
+        )
+        logging.info(
+            f"Discovered {len(slugs)} published custom secret patterns for {org_name}"
+        )
+        return slugs
+    except requests.exceptions.HTTPError as e:
+        response = e.response
+        status_code = response.status_code if response is not None else None
+        if status_code == 403:
+            logging.warning(
+                f"Cannot discover custom patterns for {org_name}: the GitHub App "
+                "needs Organization Administration: Read permission. "
+                "Continuing with configured CUSTOM_SECRET_TYPES."
+            )
+        else:
+            logging.warning(
+                f"Failed to discover custom patterns for {org_name} "
+                f"(HTTP {status_code or 'unknown'}): {e}"
+            )
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Failed to discover custom patterns for {org_name}: {e}")
+
+    return []
 
 
 def export_to_excel(
@@ -1486,6 +1684,7 @@ def create_secret_scanning_csv(timestamp: str) -> str:
             "Cost_Center",
             "Secret_Type",
             "Secret_Type_ID",
+            "Pattern_Category",
             "State",
             "Assignee",
             "Created_At",
@@ -1573,6 +1772,7 @@ def append_alerts_to_csv(csv_file: str, alerts: List[Dict]) -> bool:
                     # Remove the temporary first_location_detected field before writing
                     write_alert = alert.copy()
                     write_alert.pop("first_location_detected", None)
+                    write_alert.pop("_pattern_category", None)
                     writer.writerow(write_alert)
             return True
         return False
@@ -1684,6 +1884,8 @@ def process_single_organization(
     org_issues_csv: str,
     secret_csv: str,
     metrics: PerformanceMetrics,
+    custom_secret_types: Optional[List[str]] = None,
+    auto_discover_custom_patterns: bool = AUTO_DISCOVER_CUSTOM_PATTERNS,
 ) -> Tuple[List[Dict], bool]:
     """
     Process alerts for a single organization.
@@ -1695,17 +1897,16 @@ def process_single_organization(
     try:
         logging.info(f"[{org_index}/{total_orgs}] Processing organization: {org_name}")
 
-        # Authenticate for this organization
-        if not github_app_auth.authenticate_for_organization(org_name):
+        # Authenticate and copy the organization-specific token into an
+        # isolated session before another worker can authenticate.
+        session = github_app_auth.get_authenticated_session_for_organization(org_name)
+        if session is None:
             error_msg = "No GitHub App installation found"
             logging.warning(
                 f"Failed to authenticate for organization: {org_name}. Skipping."
             )
             append_org_access_issue(org_issues_csv, org_name, error_msg)
             return [], False
-
-        # Get authenticated session
-        session = github_app_auth.get_authenticated_session()
 
         # Create session with retry configuration
         if not hasattr(session, "_retry_configured"):
@@ -1724,8 +1925,47 @@ def process_single_organization(
         org_endpoint = f"{base_api_url}/orgs/{org_name}/secret-scanning/alerts"
 
         try:
-            org_alerts = fetch_all_pages(org_endpoint, session, params.copy(), metrics)
-            logging.info(f"  [OK] Fetched {len(org_alerts)} alerts from {org_name}")
+            organization_custom_types = (
+                get_custom_secret_types()
+                if custom_secret_types is None
+                else list(custom_secret_types)
+            )
+            if INCLUDE_GENERIC_PATTERNS and auto_discover_custom_patterns:
+                discovered_types = discover_organization_custom_pattern_slugs(
+                    org_name, session, metrics
+                )
+                organization_custom_types = list(
+                    dict.fromkeys((*organization_custom_types, *discovered_types))
+                )
+
+            organization_secret_types = get_generic_secret_types(
+                organization_custom_types
+            )
+
+            # GitHub returns default/provider patterns when secret_type is
+            # omitted, and returns only the requested generic patterns when it
+            # is supplied. Fetch both sets and merge them by alert identity.
+            default_alerts = fetch_all_pages(
+                org_endpoint, session, params.copy(), metrics
+            )
+            generic_alerts = []
+            if INCLUDE_GENERIC_PATTERNS:
+                generic_params = params.copy()
+                generic_params["secret_type"] = ",".join(
+                    organization_secret_types
+                )
+                generic_alerts = fetch_all_pages(
+                    org_endpoint, session, generic_params, metrics
+                )
+
+            org_alerts = merge_secret_scanning_alerts(
+                default_alerts, generic_alerts
+            )
+            logging.info(
+                f"  [OK] Fetched {len(default_alerts)} default/provider + "
+                f"{len(generic_alerts)} generic alerts ({len(org_alerts)} unique) "
+                f"from {org_name}"
+            )
 
             if metrics:
                 metrics.total_alerts += len(org_alerts)
@@ -1733,7 +1973,11 @@ def process_single_organization(
             # Extract alert data immediately and append to CSV
             if org_alerts:
 
-                extracted_alerts = list(extract_secret_scanning_data(org_alerts))
+                extracted_alerts = list(
+                    extract_secret_scanning_data(
+                        org_alerts, organization_secret_types
+                    )
+                )
                 if extracted_alerts:
                     append_alerts_to_csv(secret_csv, extracted_alerts)
                     logging.info(
@@ -1763,6 +2007,8 @@ def process_organizations_concurrently(
     org_issues_csv: str,
     secret_csv: str,
     metrics: PerformanceMetrics,
+    custom_secret_types: Optional[List[str]] = None,
+    auto_discover_custom_patterns: bool = AUTO_DISCOVER_CUSTOM_PATTERNS,
 ) -> Tuple[List[Dict], int, int]:
     """
     Process organizations concurrently for better performance.
@@ -1790,6 +2036,8 @@ def process_organizations_concurrently(
                 org_issues_csv,
                 secret_csv,
                 metrics,
+                custom_secret_types,
+                auto_discover_custom_patterns,
             ): org_name
             for idx, org_name in enumerate(organizations, 1)
         }
@@ -1967,9 +2215,10 @@ def enrich_organization_alerts_from_csv(
     logging.info(f"Enriching {len(org_alerts)} alerts for {org_name}...")
 
     try:
-        # Authenticate for this organization
-        if github_app_auth.authenticate_for_organization(org_name):
-            session = github_app_auth.get_authenticated_session()
+        # Authenticate and copy the organization-specific token into an
+        # isolated session before another worker can authenticate.
+        session = github_app_auth.get_authenticated_session_for_organization(org_name)
+        if session is not None:
 
             # Cache repository admins to avoid repeated API calls for the same repo
             repo_admin_cache = {}
@@ -2082,9 +2331,10 @@ def enrich_organization_alerts(
     logging.info(f"Enriching {len(org_alerts)} alerts for {org_name}...")
 
     try:
-        # Authenticate for this organization
-        if github_app_auth.authenticate_for_organization(org_name):
-            session = github_app_auth.get_authenticated_session()
+        # Authenticate and copy the organization-specific token into an
+        # isolated session before another worker can authenticate.
+        session = github_app_auth.get_authenticated_session_for_organization(org_name)
+        if session is not None:
 
             # Cache repository admins to avoid repeated API calls for the same repo
             repo_admin_cache = {}
@@ -2275,6 +2525,12 @@ def main():
             params["state"] = state_param
             logging.info(f"Secret Scanning: Using state filter '{state_param}'")
 
+        if config["include_generic_patterns"]:
+            logging.info(
+                "Secret Scanning: Fetching default/provider alerts and "
+                "generic/AI-detected alerts separately"
+            )
+
         # Generate timestamp for this query execution
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -2298,6 +2554,8 @@ def main():
                 org_issues_csv,
                 secret_csv,
                 metrics,
+                config["custom_secret_types"],
+                config["auto_discover_custom_patterns"],
             )
         )
         metrics.processing_times["fetch_alerts"] = time.time() - stage_start
@@ -2339,6 +2597,12 @@ def main():
         logging.info("=" * 80)
         logging.info("Data Processing Complete:")
         logging.info(f"  - Secret Scanning: {len(secret_scanning_data)} alerts")
+        logging.info(
+            f"  - Default Patterns: {count_by_field(secret_scanning_data, 'Pattern_Category', 'default')}"
+        )
+        logging.info(
+            f"  - Generic Patterns: {count_by_field(secret_scanning_data, 'Pattern_Category', 'generic')}"
+        )
         logging.info(f"  - CSV File: {secret_csv}")
         logging.info("=" * 80)
 

@@ -49,6 +49,7 @@ ALERT_STATE=all                    # Options: open, resolved, all (default: all)
 OUTPUT_FILENAME=secret_scanning_report  # Default output filename
 OUTPUT_FORMAT=csv                  # Options: csv, xlsx, both (default: csv)
 ENABLE_COMMIT_ENRICHMENT=false     # Set to true to fetch commit author info (uses more API calls)
+CUSTOM_SECRET_TYPES=               # Optional comma-separated custom pattern slugs
 ```
 
 ### Option 2: GitHub App Authentication (fetch_secret_scanning_alerts_githubApp.py)
@@ -63,6 +64,7 @@ You need to create and install a GitHub App with the following permissions:
 
 - **Organization permissions:**
   - Members: Read-only (optional, for organization access)
+   - Administration: Read-only (required for automatic custom-pattern discovery)
 
 #### 2. Install the GitHub App
 
@@ -89,7 +91,7 @@ GITHUB_TOKEN=your_personal_access_token_with_enterprise_read
 ALERT_STATE=all                    # Options: open, resolved, all (default: all)
 OUTPUT_FILENAME=secret_scanning_report  # Default output filename
 OUTPUT_FORMAT=csv                  # Options: csv, xlsx, both (default: csv)
-SECRET_TYPES=                      # Custom pattern names (see "Generic Patterns" section below)
+CUSTOM_SECRET_TYPES=               # Custom pattern slugs (optional)
 
 # Optional: SSL Configuration (for corporate environments)
 VERIFY_SSL=true                    # Set to false if using self-signed certificates
@@ -328,19 +330,18 @@ For large enterprises (100+ organizations), expect execution times of 5-30 minut
 
 ### The Problem
 
-GitHub's Secret Scanning API has a **critical limitation**:
-
-- **By default**: The API returns **ONLY default patterns** (GitHub's built-in patterns like AWS keys, GitHub tokens, etc.)
-- **Generic/Custom patterns**: Are **NOT returned** unless you explicitly specify their names in the `SECRET_TYPES` parameter
+GitHub's Secret Scanning API returns default/provider patterns by default. Generic
+and AI-detected patterns must be explicitly included in the `secret_type` query
+parameter. Organization and enterprise custom patterns also require their slugs.
 
 **This means:**
 - If you see alerts in the GitHub UI with the filter `is:open results:generic`
 - But the script returns **0 results**
-- ✅ **You need to configure custom pattern names in `SECRET_TYPES`**
+- ✅ **Check that generic retrieval is enabled and custom slugs are configured when applicable**
 
 ### The Solution
 
-#### Step 1: Find Your Custom Pattern Names
+#### Step 1: Find Your Custom Pattern Names (if applicable)
 
 **Option A: Check Enterprise/Organization Settings**
 1. Go to GitHub Enterprise Settings (or Organization Settings)
@@ -353,33 +354,46 @@ GitHub's Secret Scanning API has a **critical limitation**:
 2. Look at the alert details
 3. The pattern name is shown in the alert type
 
-**Option C: Use the Discovery Script**
-```bash
-python scripts/fetch-secret-scanning/discover_custom_patterns.py
-```
-(Note: This script will guide you on finding the names, as the API doesn't provide a discovery endpoint)
+**Option C: Let the App discover them**
 
-#### Step 2: Configure SECRET_TYPES
+The App script calls `GET /orgs/{org}/secret-scanning/custom-patterns` for each
+organization and adds all published pattern slugs automatically. This requires
+the GitHub App's **Administration: Read** organization permission.
 
-Add your custom pattern names to the `.env` file:
+#### Step 2: Configure Generic Pattern Fetching
+
+The GitHub App script includes GitHub's built-in generic and AI-detected pattern
+slugs automatically. It also includes all default/provider patterns. The
+supported built-in generic types are:
+
+`ec_private_key`, `generic_private_key`, `http_basic_authentication_header`,
+`http_bearer_authentication_header`, `mongodb_connection_string`,
+`mysql_connection_url`, `openssh_private_key`, `password`, `pgp_private_key`,
+`postgres_connection_string`, and `rsa_private_key`.
+
+To include organization or enterprise custom pattern slugs, add them to the
+project `.env` file:
 
 ```env
-# To fetch ONLY default patterns (omit or leave empty)
-SECRET_TYPES=
+# Built-in generic patterns are included automatically by the App script
+INCLUDE_GENERIC_PATTERNS=true
 
-# To fetch ONLY custom patterns
-SECRET_TYPES=password,internal_api_key,custom_token
+# Automatically discover published organization custom patterns
+AUTO_DISCOVER_CUSTOM_PATTERNS=true
 
-# To fetch both default AND custom (list all custom pattern names)
-SECRET_TYPES=password,internal_api_key,custom_token
+# Optional fallback/additional custom pattern slugs
+# CUSTOM_SECRET_TYPES=internal_api_key,custom_token
 ```
 
-**Note**: Setting `SECRET_TYPES=all` does **NOT** magically fetch all patterns - it still only gets default patterns!
+Set `INCLUDE_GENERIC_PATTERNS=false` only when you intentionally want the
+default/provider patterns alone. Set `AUTO_DISCOVER_CUSTOM_PATTERNS=false` only
+when discovery is unavailable or undesired. `CUSTOM_SECRET_TYPES` can still provide
+additional custom slugs manually.
 
 #### Step 3: Run the Script
 
 ```bash
-python scripts/fetch-secret-scanning/fetch_secret_scanning_alerts.py
+python scripts/fetch-secret-scanning/fetch_secret_scanning_alerts_githubApp.py
 ```
 
 ### Output with Pattern Categories
@@ -400,24 +414,29 @@ Data Processing Complete:
 
 ### "Fetched 0 alerts" but I see alerts in the UI
 
-**Cause**: You're viewing generic/custom pattern alerts in the UI (filtered by `results:generic`), but the API only returns default patterns by default.
+**Cause**: The API requires a separate request for generic patterns. The App
+script performs that request automatically. If dynamic discovery is disabled or
+the App lacks Administration: Read, custom pattern slugs must be supplied in
+`CUSTOM_SECRET_TYPES`.
 
 **Solution**: 
-1. Find your custom pattern names from Enterprise/Org settings
-2. Add them to `SECRET_TYPES` in `.env` file
-3. Example: `SECRET_TYPES=password,api_key,internal_token`
+1. Confirm `INCLUDE_GENERIC_PATTERNS=true` in `.env`
+2. Confirm `AUTO_DISCOVER_CUSTOM_PATTERNS=true` and the App has Administration: Read
+3. Otherwise add custom pattern slugs to `CUSTOM_SECRET_TYPES`
 
-### How do I get ALL alerts (both default and custom)?
+### How do I get ALL alerts (default, generic, and custom)?
 
-1. Find all your custom pattern names
-2. List them in `SECRET_TYPES`
-3. The script will then return:
-   - All default pattern alerts (always included)
-   - All custom pattern alerts (because you specified them)
+1. Leave `INCLUDE_GENERIC_PATTERNS=true` (the default)
+2. Leave `AUTO_DISCOVER_CUSTOM_PATTERNS=true` and grant Administration: Read
+3. Use `CUSTOM_SECRET_TYPES` only for additional/manual slugs
+4. The script will then return all default/provider alerts, built-in generic and
+   AI-detected alerts, and the configured custom-pattern alerts.
 
 ### The UI shows "results:generic" filter - what does that mean?
 
-The `results:generic` filter in the GitHub UI is **NOT an API parameter**. It's a UI-only filter that shows custom patterns. To get these via API, you must specify the pattern names explicitly.
+The `results:generic` filter in the GitHub UI is **not an API parameter**. The
+App script maps it to the supported generic pattern slugs, discovers published
+organization custom patterns, and adds any slugs configured in `CUSTOM_SECRET_TYPES`.
 
 ## Support
 
@@ -426,7 +445,7 @@ For issues or questions:
 2. Verify your GitHub App configuration
 3. Ensure all environment variables are set correctly
 4. Check that the app is installed in target organizations
-5. **If getting 0 results**: Verify `SECRET_TYPES` is configured with your custom pattern names
+5. **If getting 0 results**: Verify `CUSTOM_SECRET_TYPES` is configured with your custom pattern names
 
 ## GitHub Actions Integration
 

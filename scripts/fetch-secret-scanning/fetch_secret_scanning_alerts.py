@@ -524,9 +524,9 @@ def load_alert_config() -> Dict[str, Any]:
                                  Set to 'false' to disable and save API rate limits
         TEST_MODE: Enable testing mode with limited results (default: false)
         TEST_LIMIT: Number of alerts to fetch in testing mode (default: 20)
-        SECRET_TYPES: Comma-separated list of secret types to include (default: all)
-                     By default, GitHub API returns only default patterns.
-                     To include generic/custom patterns, specify their names explicitly.
+        CUSTOM_SECRET_TYPES: Comma-separated custom pattern slugs (default: all)
+                     By default, GitHub API returns default/provider patterns.
+                     To include generic/custom patterns, specify their slugs.
                      Example: 'my_custom_pattern,another_pattern'
                      Note: Results will include a 'Pattern_Category' column (default/generic)
 
@@ -544,7 +544,7 @@ def load_alert_config() -> Dict[str, Any]:
         == "true",
         "test_mode": os.getenv("TEST_MODE", "false").lower() == "true",
         "test_limit": int(os.getenv("TEST_LIMIT", "20")),
-        "secret_types": os.getenv("SECRET_TYPES", "all").strip(),
+        "custom_secret_types": os.getenv("CUSTOM_SECRET_TYPES", "all").strip(),
     }
 
     # Validate state (Secret scanning supports: open, resolved)
@@ -574,7 +574,7 @@ def load_alert_config() -> Dict[str, Any]:
         logging.info(f"  - Test Mode: ENABLED (limit: {config['test_limit']} alerts)")
     else:
         logging.info(f"  - Test Mode: disabled")
-    logging.info(f"  - Secret Types: {config['secret_types']}")
+    logging.info(f"  - Custom Secret Types: {config['custom_secret_types']}")
 
     # Log enrichment settings
     commit_enrichment_enabled = (
@@ -1190,21 +1190,25 @@ def main():
             params["state"] = state_param
             logging.info(f"Secret Scanning: Using state filter '{state_param}'")
 
-        # Add secret_type parameter if specified
-        # By default, API returns only default patterns
-        # To include generic/custom patterns, you must specify them explicitly
-        if config["secret_types"] and config["secret_types"].lower() != "all":
-            params["secret_type"] = config["secret_types"]
+        # Add custom secret_type parameter if specified.
+        # The API returns default/provider patterns by default.
+        if (
+            config["custom_secret_types"]
+            and config["custom_secret_types"].lower() != "all"
+        ):
+            params["secret_type"] = config["custom_secret_types"]
             logging.info(
-                f"Secret Scanning: Using secret_type filter '{config['secret_types']}'"
+                "Secret Scanning: Using custom secret_type filter "
+                f"'{config['custom_secret_types']}'"
             )
             logging.info(
-                "NOTE: This will return specified secret types. To get ALL types including custom patterns, you may need to list them explicitly."
+                "NOTE: Default/provider patterns are returned by the unfiltered request; "
+                "this filter adds the specified generic/custom patterns."
             )
         else:
             logging.warning("=" * 80)
             logging.warning(
-                "SECRET_TYPES not configured - API will return DEFAULT patterns ONLY"
+                "CUSTOM_SECRET_TYPES not configured - API will return DEFAULT/PROVIDER patterns ONLY"
             )
             logging.warning(
                 "If you have GENERIC/CUSTOM patterns, they will NOT be returned!"
@@ -1215,7 +1219,7 @@ def main():
                 "1. Find your custom pattern names from Enterprise/Org settings"
             )
             logging.warning(
-                "2. Set SECRET_TYPES in .env file (e.g., SECRET_TYPES=password,api_key)"
+                "2. Set CUSTOM_SECRET_TYPES in .env file (e.g., CUSTOM_SECRET_TYPES=internal_api_key,custom_token)"
             )
             logging.warning("3. Or run: python discover_custom_patterns.py")
             logging.warning("=" * 80)
@@ -1245,8 +1249,8 @@ def main():
                 logging.warning("No alerts returned from API!")
                 logging.warning("")
                 if (
-                    not config.get("secret_types")
-                    or config["secret_types"].lower() == "all"
+                    not config.get("custom_secret_types")
+                    or config["custom_secret_types"].lower() == "all"
                 ):
                     logging.warning("Possible reasons:")
                     logging.warning(
@@ -1261,13 +1265,13 @@ def main():
                         "If you see alerts in the GitHub UI with 'results:generic' filter:"
                     )
                     logging.warning(
-                        "  → You MUST specify custom pattern names in SECRET_TYPES"
+                        "  → You MUST specify custom pattern slugs in CUSTOM_SECRET_TYPES"
                     )
                     logging.warning(
                         "  → Check Enterprise Settings > Security > Custom patterns for names"
                     )
                     logging.warning(
-                        "  → Example: SECRET_TYPES=password,internal_api_key"
+                        "  → Example: CUSTOM_SECRET_TYPES=internal_api_key,custom_token"
                     )
                 logging.warning("")
         except Exception as exc:

@@ -31,6 +31,7 @@ Usage:
 import os
 import jwt
 import time
+import threading
 import requests
 import urllib3
 from datetime import datetime, timedelta
@@ -121,6 +122,10 @@ class GitHubAppAuth:
         self.installation_id = None
         self.access_token = None
         self.token_expires_at = None
+        # authenticate_for_organization updates the token fields above. Protect
+        # authentication and session creation when callers process organizations
+        # concurrently. The returned session owns a copy of the token header.
+        self._organization_auth_lock = threading.Lock()
         self.session = requests.Session()
 
         # Set SSL verification
@@ -401,6 +406,28 @@ class GitHubAppAuth:
         )
 
         return new_session
+
+    def get_authenticated_session_for_organization(
+        self, org_name: str
+    ) -> Optional[requests.Session]:
+        """
+        Authenticate for an organization and return an isolated API session.
+
+        Authentication state is stored on this object for compatibility with
+        existing callers. This method makes the authenticate-and-copy-token
+        sequence atomic so concurrent organization workers cannot receive one
+        another's installation tokens.
+
+        Args:
+            org_name: The organization name
+
+        Returns:
+            An authenticated session, or None when authentication fails.
+        """
+        with self._organization_auth_lock:
+            if not self.authenticate_for_organization(org_name):
+                return None
+            return self.get_authenticated_session()
 
     def is_authenticated(self) -> bool:
         """
